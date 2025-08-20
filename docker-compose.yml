@@ -1,0 +1,16 @@
+version: "3.8"
+services:
+  hashcrack:
+    build: .
+    image: edu/hashcrack:latest
+    command: ["web", "--addr", ":8080"]
+    working_dir: /data
+    volumes:
+      - .:/data
+    ports:
+      - "8080:8080"
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1g
