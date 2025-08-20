@@ -1,3 +1,5 @@
+package cracker
+
 import (
 	"bufio"
 	"context"
@@ -11,15 +13,13 @@ import (
 	"time"
 
 	"edu/hashcrack/internal/hashes"
-	"edu/hashcrack/pkg/workerpool"
 )
-// basic definitions for now until we get the dir structure sorted
+
 type Options struct {
 	Workers int
 	LogPath string
 	Event   func(event string, kv map[string]any)
-	ProgressEvery uint64 // 50k
-  // todo: improve this (generates candidate mutations for a wordlist entry, if nil the input word is used as it is)
+	ProgressEvery uint64 
 	Transform func(string) []string
 }
 
@@ -85,11 +85,11 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 	defer f.Close()
 
 	workers := c.opts.Workers
-	if workers <= 0 { workers = runtime.NumCPU() }
-	if workers > runtime.NumCPU() { workers = runtime.NumCPU() }
+	if workers <= 0 { workers = runtime.NumCPU() * 2 } // 5adema... barcha 5adema
+	if workers > runtime.NumCPU() * 4 { workers = runtime.NumCPU() * 4 } // cap at 4x CPU cores so it isn't excessive 
 	c.logEvent("start", map[string]any{"workers": workers, "algo": h.Name(), "wordlist": wordlistPath})
 
-	target = strings.ToLower(strings.TrimSpace(target))
+	target = strings.TrimSpace(target)
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -98,52 +98,109 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 	var found atomic.Bool
 	var plaintext atomic.Value
 
-	pool := workerpool.NewStringPool(ctx, workers, func(ctx context.Context, s string) {
-		if found.Load() {
-			return
-		}
-		candidates := []string{s}
-		if c.opts.Transform != nil {
-			if xs := c.opts.Transform(s); len(xs) > 0 { candidates = xs }
-		}
-		for _, cand := range candidates {
-			if found.Load() { return }
-			ok, _ := h.Compare(target, cand, p)
-			n := atomic.AddUint64(&tried, 1)
-			if ok {
-				plaintext.Store(cand)
-				found.Store(true)
-				cancel()
-				c.logEvent("found", map[string]any{"candidate": cand, "tried": n})
-				return
+	workChan := make(chan string, workers*8)
+	
+	// added: sync.WaitGroup  per worker
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			localTried := uint64(0)
+			
+			for {
+				select {
+				case <-ctx.Done():
+					atomic.AddUint64(&tried, localTried)
+					return
+				case word, ok := <-workChan:
+					if !ok {
+						atomic.AddUint64(&tried, localTried)
+						return
+					}
+					
+					if found.Load() {
+						continue
+					}
+					
+					candidates := []string{word}
+					if c.opts.Transform != nil {
+						if xs := c.opts.Transform(word); len(xs) > 0 { 
+							candidates = xs 
+						}
+					}
+					
+					for _, cand := range candidates {
+						if found.Load() { 
+							break 
+						}
+						
+						ok, _ := h.Compare(target, cand, p)
+						localTried++
+						
+						if ok {
+							plaintext.Store(cand)
+							found.Store(true)
+							cancel()
+							
+							globalCount := atomic.AddUint64(&tried, localTried)
+							c.logEvent("found", map[string]any{
+								"candidate": cand, 
+								"tried": globalCount,
+							})
+							return
+						}
+						// batch them all and process
+						if localTried%1000 == 0 {
+							globalCount := atomic.AddUint64(&tried, 1000)
+							localTried = 0 
+							
+							every := c.opts.ProgressEvery
+							if every == 0 { every = 50000 }
+							if globalCount%every == 0 { 
+								c.logEvent("progress", map[string]any{
+									"tried": globalCount,
+									"candidate": cand,
+								}) 
+							}
+						}
+					}
+				}
 			}
-			every := c.opts.ProgressEvery
-			if every == 0 { every = 50000 }
-			if n%every == 0 { c.logEvent("progress", map[string]any{"tried": n}) }
-		}
-	})
-	defer pool.Close()
+		}()
+	}
 
 	scanner := bufio.NewScanner(f)
-	buf := make([]byte, 0, 1024*1024)
-	scanner.Buffer(buf, 1024*1024)
-	for scanner.Scan() {
-		line := strings.TrimRight(scanner.Text(), "\r\n")
-		if line == "" {
-			continue
+	buf := make([]byte, 0, 2*1024*1024) // 2MB buffer
+	scanner.Buffer(buf, 2*1024*1024)
+	
+	// Feed work to workers
+	go func() {
+		defer close(workChan)
+		
+		for scanner.Scan() {
+			line := strings.TrimRight(scanner.Text(), "\r\n")
+			if line == "" {
+				continue
+			}
+			
+			select {
+			case workChan <- line:
+			case <-ctx.Done():
+				return
+			}
+			
+			if found.Load() {
+				break
+			}
 		}
-		if !pool.Submit(line) {
-			break
-		}
-		if found.Load() {
-			break
-		}
-	}
+	}()
+
+	wg.Wait()
+
 	if err := scanner.Err(); err != nil {
 		return res, err
 	}
-
-	pool.Close()
 
 	res.Duration = time.Since(start)
 	res.Tried = atomic.LoadUint64(&tried)
@@ -151,7 +208,10 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 		res.Found = true
 		res.Plaintext = v.(string)
 	}
-	c.logEvent("done", map[string]any{"found": res.Found, "tried": res.Tried, "duration_ms": res.Duration.Milliseconds()})
+	c.logEvent("done", map[string]any{
+		"found": res.Found, 
+		"tried": res.Tried, 
+		"duration_ms": res.Duration.Milliseconds(),
+	})
 	return res, nil
 }
-
