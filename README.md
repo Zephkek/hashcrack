@@ -1,7 +1,5 @@
 # HashCrack Platform TODO (Core Engine)
 
-Scope: only `internal/hashes` and `internal/cracker`.
-
 ## Done
 - internal/hashes
   - Hasher interface + `Params`
@@ -11,12 +9,12 @@ Scope: only `internal/hashes` and `internal/cracker`.
   - Wordlist cracker with worker pool, cancel, and progress
   - Simple rules (+u, +l, +c, +d1, +d2)
   - Event/log hook for UI or CLI
+  - Attack methods backend
+
 
 ## In progress
-- More unit tests and edge cases per algorithm
-- Benchmarks for bcrypt, scrypt, argon2
-- Cleaner error messages
-- Actual Web server
+- Actual Web server backend
+- CLI interface
 - UI/UX
 
 ## Next
