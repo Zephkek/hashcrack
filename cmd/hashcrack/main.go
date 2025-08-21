@@ -32,9 +32,8 @@ var rootCmd = &cobra.Command{
 	Use:   "hashcrack",
 	Short: "HashCrack - A fast, concurrent hash-cracking toolkit",
 	Long: `HashCrack is a high-performance hash cracking tool designed for 
-cybersecurity education (and my internship at GI lolol)`,
+cybersecurity education and research purposes.`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-    //WIP still haven't fully setup this.
 		if config != "" {
 			viper.SetConfigFile(config)
 			if err := viper.ReadInConfig(); err != nil {
