@@ -214,13 +214,12 @@ func hashLen(algo string) int {
 
 var (
 	md5Once   sync.Once
-	md5Server *md5simd.Server
+	md5Server md5simd.Server
 )
 
-func getMD5Server() *md5simd.Server {
+func getMD5Server() md5simd.Server {
 	md5Once.Do(func() {
-		srv := md5simd.NewServer()
-		md5Server = &srv
+		md5Server = md5simd.NewServer()
 	})
 	return md5Server
 }
