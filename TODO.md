@@ -14,8 +14,8 @@
   - CLI interface
   - UI
   - Add PBKDF2 and SHA3
+  - Proper documentation / readme
+  - Short docs and examples
 
 ## Next
-- Short docs and examples
 - CI: lint and tests
-- Proper documentation / readme
