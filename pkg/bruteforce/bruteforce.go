@@ -125,12 +125,16 @@ func (bf *ConcurrentBruteForcer) worker(
 	switch {
 	case algo == "bcrypt":
 		progressInterval = 50
+	case algo == "scrypt":
+		progressInterval = 100
+	case strings.Contains(algo, "argon"):
+		progressInterval = 100
 	case total <= 100_000:
-		progressInterval = 200
+		progressInterval = 500  // More frequent for small tasks
 	case total <= 5_000_000:
 		progressInterval = 2_000
 	default:
-		progressInterval = 10_000
+		progressInterval = 5_000  // Reduced for better stability
 	}
 	
 	for {
