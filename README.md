@@ -11,10 +11,10 @@
   - Event/log hook for UI or CLI
   - Attack methods backend
   - Actual Web server backend
+  - CLI interface
 
 
 ## In progress
-- CLI interface
 - UI/UX
 
 ## Next
