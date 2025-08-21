@@ -214,28 +214,22 @@ function showStep(step) {
   }
 }
 
-// FIX: Improved task creation with better error handling
+// improved task creation 
 async function createTask(evt){
   evt.preventDefault();
   const form = evt.target;
   
   const submitBtn = form.querySelector('button[type="submit"]');
   const originalText = submitBtn.innerHTML;
-  submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating Task...';
+  submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> creating task...';
   submitBtn.disabled = true;
   
   try {
     const payload = collectFormData(form);
     
-    if (!payload) {
+    if (!payload || !validatePayload(payload)) {
       return;
     }
-    
-    if (!validatePayload(payload)) {
-      return;
-    }
-    
-    console.log('Sending payload:', payload); // FIX: Debug logging
     
     const res = await fetch('/api/tasks', {
       method:'POST', 
@@ -245,36 +239,39 @@ async function createTask(evt){
     
     if (!res.ok){ 
       const txt = await res.text(); 
-      console.error('Server error:', txt);
-      showToast('Error creating task: ' + txt, 'error'); 
+      showToast('error creating task: ' + txt, 'error'); 
       return; 
     }
     
-    showToast('Task created successfully!', 'success');
+    showToast('task created successfully!', 'success');
     form.reset();
     showStep(1);
     
-    // FIX: Reset upload section properly
+    // reset upload section
     const uploadPlaceholder = document.getElementById('uploadPlaceholder');
     const uploadControls = document.getElementById('uploadControls');
+    const uploadSection = document.getElementById('uploadSection');
     if (uploadPlaceholder) uploadPlaceholder.style.display = 'block';
     if (uploadControls) uploadControls.style.display = 'none';
+    if (uploadSection) uploadSection.style.display = 'none';
     
     const defaultRadio = document.querySelector('input[name="wordlist_source"][value="default"]');
-    if (defaultRadio) defaultRadio.checked = true;
+    if (defaultRadio) {
+      defaultRadio.checked = true;
+      defaultRadio.dispatchEvent(new Event('change'));
+    }
     
     loadTasks();
     
   } catch (error) {
-    console.error('Task creation error:', error);
-    showToast('Failed to create task: ' + error.message, 'error');
+    showToast('failed to create task: ' + error.message, 'error');
   } finally {
     submitBtn.innerHTML = originalText;
     submitBtn.disabled = false;
   }
 }
 
-// FIX: Proper form data collection with wordlist handling
+// clean form data collection
 function collectFormData(form) {
   const fd = new FormData(form);
   const payload = Object.fromEntries(fd.entries());
@@ -284,22 +281,31 @@ function collectFormData(form) {
   payload.bf_max = Number(payload.bf_max||0);
   
   const wordlistSource = document.querySelector('input[name="wordlist_source"]:checked')?.value;
+  const wordlistInput = document.getElementById('wordlist');
   
-  // FIX: Wordlist handling
   if (wordlistSource === 'default') {
     payload.use_default_wordlist = true;
     payload.wordlist = '';
   } else if (wordlistSource === 'upload') {
     payload.use_default_wordlist = false;
-    if (!payload.wordlist || payload.wordlist.trim() === '') {
-      showToast('Please upload a wordlist file first', 'error');
+    
+    let wordlistPath = '';
+    if (wordlistInput && wordlistInput.value.trim()) {
+      wordlistPath = wordlistInput.value.trim();
+    } else if (window.uploadState?.isFileUploaded && window.uploadState.uploadedFilePath) {
+      wordlistPath = window.uploadState.uploadedFilePath;
+      if (wordlistInput) wordlistInput.value = wordlistPath;
+    }
+    
+    if (!wordlistPath) {
+      showToast('please upload a wordlist file first', 'error');
       return null;
     }
-  } else {
-    if (payload.mode === 'wordlist') {
-      payload.use_default_wordlist = true;
-      payload.wordlist = '';
-    }
+    
+    payload.wordlist = wordlistPath;
+  } else if (payload.mode === 'wordlist') {
+    payload.use_default_wordlist = true;
+    payload.wordlist = '';
   }
   
   payload.rules = Array.from(form.querySelectorAll('input[name="rules"]:checked')).map(el=>el.value);
@@ -315,123 +321,180 @@ function collectFormData(form) {
   return payload;
 }
 
-// FIX: Enhanced validation for wordlist mode
+// clean validation 
 function validatePayload(payload) {
   if (!payload.target || !payload.target.trim()) {
-    showToast('Please enter a target hash', 'error');
-    showStep(1);
-    return false;
-  }
-  if (!payload.algo || payload.algo === 'auto') {
-    showToast('Please select the algorithm (auto-detect only provides suggestions).', 'error');
+    showToast('please enter a target hash', 'error');
     showStep(1);
     return false;
   }
   
-  // FIX: Validate wordlist mode properly
+  if (!payload.algo || payload.algo === 'auto') {
+    showToast('please select the algorithm', 'error');
+    showStep(1);
+    return false;
+  }
+  
   if (payload.mode === 'wordlist') {
-    if (!payload.use_default_wordlist && (!payload.wordlist || payload.wordlist.trim() === '')) {
-      showToast('Please select a wordlist source (default or upload a custom file)', 'error');
+    if (payload.use_default_wordlist) {
+      if (payload.wordlist && payload.wordlist.trim() !== '') {
+        showToast('choose either default wordlist or custom upload, not both', 'error');
+        showStep(2);
+        return false;
+      }
+    } else {
+      const hasWordlistPath = payload.wordlist && payload.wordlist.trim() !== '';
+      const hasUploadState = window.uploadState && window.uploadState.isFileUploaded;
+      
+      if (!hasWordlistPath) {
+        if (hasUploadState && window.uploadState.uploadedFilePath) {
+          payload.wordlist = window.uploadState.uploadedFilePath;
+        } else {
+          showToast('please upload a wordlist file', 'error');
+          showStep(2);
+          return false;
+        }
+      }
+    }
+  }
+  
+  if (payload.mode === 'mask' && (!payload.mask || payload.mask.trim() === '')) {
+    showToast('please provide a mask pattern', 'error');
+    showStep(2);
+    return false;
+  }
+  
+  if (payload.mode === 'bruteforce') {
+    if (!payload.bf_chars || payload.bf_chars.trim() === '') {
+      showToast('please specify character set for brute force', 'error');
       showStep(2);
       return false;
     }
     
-    if (payload.use_default_wordlist && payload.wordlist && payload.wordlist.trim() !== '') {
-      showToast('Choose either default wordlist or custom upload, not both.', 'error');
+    if (payload.bf_min <= 0 || payload.bf_max <= 0 || payload.bf_min > payload.bf_max) {
+      showToast('please specify valid length range', 'error');
       showStep(2);
       return false;
     }
-  }
-  
-  if (payload.mode === 'mask' && !payload.mask) {
-    showToast('Please provide a mask pattern for mask attack', 'error');
-    showStep(2);
-    return false;
-  }
-  
-  if (payload.mode === 'bruteforce' && !payload.bf_chars) {
-    showToast('Please specify character set for brute force attack', 'error');
-    showStep(2);
-    return false;
   }
   
   return true;
 }
 
 document.addEventListener('DOMContentLoaded', function() {
-  const uploadBtn = document.getElementById('uploadBtn');
   const fileInput = document.getElementById('uploadFile');
   const uploadPlaceholder = document.getElementById('uploadPlaceholder');
   const uploadControls = document.getElementById('uploadControls');
   const uploadFilename = document.getElementById('uploadFilename');
-  const uploadText = document.getElementById('uploadText');
   
-  // FIX: Handle file selection UI changes
-  if (fileInput) {
-    fileInput.addEventListener('change', function() {
-      if (this.files.length > 0) {
-        const fileName = this.files[0].name;
-        if (uploadPlaceholder) uploadPlaceholder.style.display = 'none';
-        if (uploadControls) uploadControls.style.display = 'flex';
-        if (uploadFilename) uploadFilename.textContent = fileName;
-      }
-    });
+  // global upload state
+  if (!window.uploadState) {
+    window.uploadState = {
+      isFileUploaded: false,
+      uploadedFilePath: ''
+    };
   }
   
-  if (uploadBtn && fileInput) {
-    uploadBtn.addEventListener('click', async () => {
-      if (!fileInput.files.length) { 
-        showToast('Please choose a .txt or .lst file', 'error'); 
-        return; 
+  // auto-upload when file is selected
+  if (fileInput) {
+    fileInput.addEventListener('change', async function() {
+      if (this.files.length === 0) return;
+      
+      const file = this.files[0];
+      
+      // validate file
+      if (file.size > 10 * 1024 * 1024) {
+        showToast('File too large (max 10MB)', 'error');
+        this.value = '';
+        return;
       }
       
-      const file = fileInput.files[0];
-      if (file.size > 10 * 1024 * 1024) { 
-        showToast('File too large (max 10MB)', 'error'); 
-        return; 
+      const ext = file.name.toLowerCase().split('.').pop();
+      if (ext !== 'txt' && ext !== 'lst') {
+        showToast('Only .txt and .lst files are supported', 'error');
+        this.value = '';
+        return;
       }
       
-      uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
-      uploadBtn.disabled = true;
+      // show uploading state
+      if (uploadPlaceholder) uploadPlaceholder.style.display = 'none';
+      if (uploadControls) uploadControls.style.display = 'flex';
+      if (uploadFilename) {
+        uploadFilename.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Uploading ${file.name}...`;
+      }
+      
+      // reset state
+      window.uploadState.isFileUploaded = false;
+      window.uploadState.uploadedFilePath = '';
+      const wordlistInput = document.getElementById('wordlist');
+      if (wordlistInput) wordlistInput.value = '';
       
       try {
         const form = new FormData();
         form.append('file', file, file.name);
         
-        const res = await fetch('/api/uploads', { method: 'POST', body: form });
+        const res = await fetch('/api/uploads', { 
+          method: 'POST', 
+          body: form 
+        });
+        
         if (!res.ok) { 
           const errorText = await res.text();
-          showToast('Upload failed: ' + errorText, 'error'); 
-          return; 
+          showToast('Upload failed: ' + errorText, 'error');
+          resetUploadUI();
+          return;
         }
         
         const data = await res.json();
         
-        // FIX: Set wordlist path properly
-        const wordlistInput = document.getElementById('wordlist');
+        // update state and form
+        window.uploadState.isFileUploaded = true;
+        window.uploadState.uploadedFilePath = data.path;
+        
         if (wordlistInput) {
           wordlistInput.value = data.path;
+          wordlistInput.dispatchEvent(new Event('change'));
         }
         
         const useDefaultInput = document.getElementById('useDefault');
-        if (useDefaultInput) {
-          useDefaultInput.value = 'false';
+        if (useDefaultInput) useDefaultInput.value = 'false';
+        
+        // ensure upload radio is selected
+        const uploadRadio = document.querySelector('input[name="wordlist_source"][value="upload"]');
+        if (uploadRadio) {
+          uploadRadio.checked = true;
+          uploadRadio.dispatchEvent(new Event('change'));
         }
         
-        // FIX: Update upload UI to show success
+        // show success
         if (uploadFilename) {
           uploadFilename.innerHTML = `<i class="fas fa-check-circle" style="color: var(--success-color);"></i> ${file.name} uploaded`;
         }
         
-        showToast('File uploaded successfully!', 'success');
+        showToast(`File uploaded: ${data.filename}`, 'success');
         
       } catch (error) {
         showToast('Upload failed: ' + error.message, 'error');
-      } finally {
-        uploadBtn.innerHTML = '<i class="fas fa-upload"></i> Re-upload';
-        uploadBtn.disabled = false;
+        resetUploadUI();
+        window.uploadState.isFileUploaded = false;
+        window.uploadState.uploadedFilePath = '';
+        if (wordlistInput) wordlistInput.value = '';
       }
     });
+  }
+  
+  function resetUploadUI() {
+    if (uploadPlaceholder) uploadPlaceholder.style.display = 'block';
+    if (uploadControls) uploadControls.style.display = 'none';
+    if (fileInput) fileInput.value = '';
+  }
+  
+  function formatFileSize(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   }
 });
 
