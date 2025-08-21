@@ -27,7 +27,6 @@ window.renderTasks = function(tasks){
     const durMs = t.result ? Math.round((t.result.duration_ns||0)/1e6) : '';
     const result = t.result?.plaintext ? `<strong style="color: var(--success-color);">${escapeHtml(t.result.plaintext)}</strong>` : '';
     
-    // ugly progress bar, todo: nuke this and make a proper one.
     let progress = '';
     if (t.status === 'running' && t.progress) {
       const p = t.progress;
@@ -98,10 +97,7 @@ window.renderTasks = function(tasks){
     next.push(tr);
   }
   
-  // Replace tbody children in one pass to prevent flicker
   tbody.replaceChildren(...next);
-  
-  // Update tasks visibility
   updateTasksVisibility(tasks.length > 0);
 }
 
@@ -218,6 +214,7 @@ function showStep(step) {
   }
 }
 
+// FIX: Improved task creation with better error handling
 async function createTask(evt){
   evt.preventDefault();
   const form = evt.target;
@@ -230,9 +227,15 @@ async function createTask(evt){
   try {
     const payload = collectFormData(form);
     
+    if (!payload) {
+      return;
+    }
+    
     if (!validatePayload(payload)) {
       return;
     }
+    
+    console.log('Sending payload:', payload); // FIX: Debug logging
     
     const res = await fetch('/api/tasks', {
       method:'POST', 
@@ -242,16 +245,28 @@ async function createTask(evt){
     
     if (!res.ok){ 
       const txt = await res.text(); 
+      console.error('Server error:', txt);
       showToast('Error creating task: ' + txt, 'error'); 
       return; 
     }
     
     showToast('Task created successfully!', 'success');
     form.reset();
-    showStep(1); 
+    showStep(1);
+    
+    // FIX: Reset upload section properly
+    const uploadPlaceholder = document.getElementById('uploadPlaceholder');
+    const uploadControls = document.getElementById('uploadControls');
+    if (uploadPlaceholder) uploadPlaceholder.style.display = 'block';
+    if (uploadControls) uploadControls.style.display = 'none';
+    
+    const defaultRadio = document.querySelector('input[name="wordlist_source"][value="default"]');
+    if (defaultRadio) defaultRadio.checked = true;
+    
     loadTasks();
     
   } catch (error) {
+    console.error('Task creation error:', error);
     showToast('Failed to create task: ' + error.message, 'error');
   } finally {
     submitBtn.innerHTML = originalText;
@@ -259,6 +274,7 @@ async function createTask(evt){
   }
 }
 
+// FIX: Proper form data collection with wordlist handling
 function collectFormData(form) {
   const fd = new FormData(form);
   const payload = Object.fromEntries(fd.entries());
@@ -268,7 +284,23 @@ function collectFormData(form) {
   payload.bf_max = Number(payload.bf_max||0);
   
   const wordlistSource = document.querySelector('input[name="wordlist_source"]:checked')?.value;
-  payload.use_default_wordlist = wordlistSource === 'default';
+  
+  // FIX: Wordlist handling
+  if (wordlistSource === 'default') {
+    payload.use_default_wordlist = true;
+    payload.wordlist = '';
+  } else if (wordlistSource === 'upload') {
+    payload.use_default_wordlist = false;
+    if (!payload.wordlist || payload.wordlist.trim() === '') {
+      showToast('Please upload a wordlist file first', 'error');
+      return null;
+    }
+  } else {
+    if (payload.mode === 'wordlist') {
+      payload.use_default_wordlist = true;
+      payload.wordlist = '';
+    }
+  }
   
   payload.rules = Array.from(form.querySelectorAll('input[name="rules"]:checked')).map(el=>el.value);
   
@@ -283,6 +315,7 @@ function collectFormData(form) {
   return payload;
 }
 
+// FIX: Enhanced validation for wordlist mode
 function validatePayload(payload) {
   if (!payload.target || !payload.target.trim()) {
     showToast('Please enter a target hash', 'error');
@@ -295,9 +328,19 @@ function validatePayload(payload) {
     return false;
   }
   
-  if (payload.mode === 'wordlist' && payload.use_default_wordlist && (payload.wordlist||'').trim() !== ''){
-    showToast('Choose either default wordlist or custom upload, not both.', 'error'); 
-    return false;
+  // FIX: Validate wordlist mode properly
+  if (payload.mode === 'wordlist') {
+    if (!payload.use_default_wordlist && (!payload.wordlist || payload.wordlist.trim() === '')) {
+      showToast('Please select a wordlist source (default or upload a custom file)', 'error');
+      showStep(2);
+      return false;
+    }
+    
+    if (payload.use_default_wordlist && payload.wordlist && payload.wordlist.trim() !== '') {
+      showToast('Choose either default wordlist or custom upload, not both.', 'error');
+      showStep(2);
+      return false;
+    }
   }
   
   if (payload.mode === 'mask' && !payload.mask) {
@@ -318,6 +361,22 @@ function validatePayload(payload) {
 document.addEventListener('DOMContentLoaded', function() {
   const uploadBtn = document.getElementById('uploadBtn');
   const fileInput = document.getElementById('uploadFile');
+  const uploadPlaceholder = document.getElementById('uploadPlaceholder');
+  const uploadControls = document.getElementById('uploadControls');
+  const uploadFilename = document.getElementById('uploadFilename');
+  const uploadText = document.getElementById('uploadText');
+  
+  // FIX: Handle file selection UI changes
+  if (fileInput) {
+    fileInput.addEventListener('change', function() {
+      if (this.files.length > 0) {
+        const fileName = this.files[0].name;
+        if (uploadPlaceholder) uploadPlaceholder.style.display = 'none';
+        if (uploadControls) uploadControls.style.display = 'flex';
+        if (uploadFilename) uploadFilename.textContent = fileName;
+      }
+    });
+  }
   
   if (uploadBtn && fileInput) {
     uploadBtn.addEventListener('click', async () => {
@@ -332,7 +391,6 @@ document.addEventListener('DOMContentLoaded', function() {
         return; 
       }
       
-      // Show upload progress
       uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
       uploadBtn.disabled = true;
       
@@ -342,26 +400,35 @@ document.addEventListener('DOMContentLoaded', function() {
         
         const res = await fetch('/api/uploads', { method: 'POST', body: form });
         if (!res.ok) { 
-          showToast('Upload failed', 'error'); 
+          const errorText = await res.text();
+          showToast('Upload failed: ' + errorText, 'error'); 
           return; 
         }
         
         const data = await res.json();
         
-        document.querySelector('input[name="wordlist"]').value = data.path;
-        
-        const customRadio = document.querySelector('input[name="wordlist_source"][value="upload"]');
-        if (customRadio) {
-          customRadio.checked = true;
-          customRadio.dispatchEvent(new Event('change'));
+        // FIX: Set wordlist path properly
+        const wordlistInput = document.getElementById('wordlist');
+        if (wordlistInput) {
+          wordlistInput.value = data.path;
         }
         
-        showToast('File uploaded successfully: ' + data.path, 'success');
+        const useDefaultInput = document.getElementById('useDefault');
+        if (useDefaultInput) {
+          useDefaultInput.value = 'false';
+        }
+        
+        // FIX: Update upload UI to show success
+        if (uploadFilename) {
+          uploadFilename.innerHTML = `<i class="fas fa-check-circle" style="color: var(--success-color);"></i> ${file.name} uploaded`;
+        }
+        
+        showToast('File uploaded successfully!', 'success');
         
       } catch (error) {
         showToast('Upload failed: ' + error.message, 'error');
       } finally {
-        uploadBtn.innerHTML = '<i class="fas fa-upload"></i> Upload File';
+        uploadBtn.innerHTML = '<i class="fas fa-upload"></i> Re-upload';
         uploadBtn.disabled = false;
       }
     });
@@ -370,8 +437,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
 let lastStatsUpdate = 0;
 let lastTasksUpdate = 0;
-const STATS_MIN_INTERVAL = 3000; // min 3 seconds between stats updates
-const TASKS_MIN_INTERVAL = 1500; // min 1.5 seconds between task updates
+const STATS_MIN_INTERVAL = 3000;
+const TASKS_MIN_INTERVAL = 1500;
 
 async function loadStats() {
   const now = Date.now();
@@ -397,7 +464,6 @@ async function loadStats() {
     const goroutinesEl = document.getElementById('goroutines');
     const memoryEl = document.getElementById('memory');
     
-    // CPU count
     if (cpuEl) {
       if (typeof stats.system.num_cpu === 'number' && stats.system.num_cpu > 0) {
         cpuEl.textContent = `${stats.system.num_cpu} cores`;
@@ -539,11 +605,11 @@ document.addEventListener('DOMContentLoaded', function() {
   ]).then(() => {
     setInterval(() => {
       loadTasks().catch(err => console.error('Periodic tasks load failed:', err));
-    }, 2500);  s
+    }, 2500);
     
     setInterval(() => {
       loadStats().catch(err => console.error('Periodic stats load failed:', err));
-    }, 5000); 
+    }, 5000);
   });
 });
 
