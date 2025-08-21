@@ -32,7 +32,10 @@ func (n ntlmHasher) Compare(target string, plain string, p Params) (bool, error)
 	return strings.EqualFold(h, target), nil
 }
 
+// CompareBytes implements ByteComparer for NTLM (input is UTF-8).
 func (n ntlmHasher) CompareBytes(target string, plain []byte, _ Params) (bool, error) {
+	// Convert to UTF-16LE without intermediate string allocation.
+	// Go doesn't provide direct utf8->utf16 without runes, so convert to []rune once.
 	rs := []rune(string(plain))
 	utf16s := utf16.Encode(rs)
 	b := make([]byte, len(utf16s)*2)
