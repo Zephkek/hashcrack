@@ -1,26 +1,27 @@
 package web
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
-	"fmt"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"edu/hashcrack/internal/cracker"
 	"edu/hashcrack/internal/hashes"
-	"edu/hashcrack/pkg/mask"
 	"edu/hashcrack/pkg/bruteforce"
-	"runtime"
-	"strconv"
+	"edu/hashcrack/pkg/mask"
 )
 
 type Task struct {
@@ -180,6 +181,13 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+// preserve streaming support for sse
+func (rw *responseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // log requests
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -248,7 +256,6 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	// change to whatever index location you like for this container this is the location
 	possiblePaths := []string{
 		"web/template/index.html",
 	}
@@ -547,9 +554,10 @@ const maxUpload = 10 << 20 // 10mb
 func (s *Server) handleUploads(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		// list
+		// list uploaded files
 		entries, err := os.ReadDir("uploads")
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Printf("Error reading uploads directory: %v", err)
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -563,50 +571,165 @@ func (s *Server) handleUploads(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"files": files})
 		
 	case http.MethodPost:
+		// handle file upload
 		if err := r.ParseMultipartForm(maxUpload); err != nil {
-			http.Error(w, "invalid form", 400)
+			http.Error(w, "Invalid multipart form: "+err.Error(), 400)
 			return
 		}
 		
 		f, hdr, err := r.FormFile("file")
 		if err != nil {
-			http.Error(w, "file required", 400)
+			http.Error(w, "File field 'file' is required", 400)
 			return
 		}
 		defer f.Close()
 		
+		// validate file size
 		if hdr.Size > maxUpload {
-			http.Error(w, "file too large", 413)
+			http.Error(w, fmt.Sprintf("File too large (max %dMB)", maxUpload/(1024*1024)), 413)
 			return
 		}
 		
+		if hdr.Size == 0 {
+			http.Error(w, "Empty file not allowed", 400)
+			return
+		}
+		
+		// sanitize filename
 		name := filepath.Base(hdr.Filename)
-		// only txt/lst
-		if !strings.HasSuffix(strings.ToLower(name), ".txt") && !strings.HasSuffix(strings.ToLower(name), ".lst") {
-			http.Error(w, "unsupported file type", 400)
+		if name == "" || name == "." || name == ".." {
+			http.Error(w, "Invalid filename", 400)
 			return
 		}
 		
-		_ = os.MkdirAll("uploads", 0o755)
-		dstPath := filepath.Join("uploads", name)
+		// validate file extension
+		ext := strings.ToLower(filepath.Ext(name))
+		if ext != ".txt" && ext != ".lst" {
+			http.Error(w, "Only .txt and .lst files are supported", 400)
+			return
+		}
+		
+		// ensure uploads directory exists
+		uploadsDir := "uploads"
+		if err := os.MkdirAll(uploadsDir, 0755); err != nil {
+			http.Error(w, "Failed to create uploads directory", 500)
+			return
+		}
+		
+		// create destination file with unique name if needed
+		dstPath := filepath.Join(uploadsDir, name)
+		counter := 1
+		originalName := name
+		for {
+			if _, err := os.Stat(dstPath); os.IsNotExist(err) {
+				break
+			}
+			// file exists, create unique name
+			nameWithoutExt := strings.TrimSuffix(originalName, filepath.Ext(originalName))
+			dstPath = filepath.Join(uploadsDir, fmt.Sprintf("%s_%d%s", nameWithoutExt, counter, filepath.Ext(originalName)))
+			name = filepath.Base(dstPath)
+			counter++
+		}
+		
 		dst, err := os.Create(dstPath)
 		if err != nil {
-			http.Error(w, err.Error(), 500)
+			http.Error(w, "Failed to create destination file", 500)
 			return
 		}
 		defer dst.Close()
 		
-		if _, err := io.Copy(dst, io.LimitReader(f, maxUpload)); err != nil {
-			http.Error(w, err.Error(), 500)
+		// copy file content with size limit
+		written, err := io.Copy(dst, io.LimitReader(f, maxUpload))
+		if err != nil {
+			os.Remove(dstPath) // clean up on error
+			http.Error(w, "Failed to save file", 500)
 			return
 		}
 		
+		// verify content was written
+		if written == 0 {
+			os.Remove(dstPath) // clean up
+			http.Error(w, "No content in uploaded file", 400)
+			return
+		}
+		
+		// validate file content (check if it's a valid wordlist)
+		if err := validateWordlistFile(dstPath); err != nil {
+			os.Remove(dstPath) // clean up invalid file
+			http.Error(w, "Invalid wordlist file: "+err.Error(), 400)
+			return
+		}
+		
+		log.Printf("File uploaded: %s (%d bytes)", name, written)
+		
+		// return the path that the client should use
+		response := map[string]any{
+			"path":     "/uploads/" + name,
+			"filename": name,
+			"size":     written,
+			"message":  "File uploaded successfully",
+		}
+		
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"path": "/uploads/" + name})
+		json.NewEncoder(w).Encode(response)
 		
 	default:
-		http.Error(w, "method not allowed", 405)
+		http.Error(w, "Method not allowed", 405)
 	}
+}
+
+// validateWordlistFile checks if the uploaded file is a valid wordlist
+func validateWordlistFile(filePath string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("cannot open file: %v", err)
+	}
+	defer file.Close()
+	
+	scanner := bufio.NewScanner(file)
+	lineCount := 0
+	emptyLines := 0
+	maxLineLength := 0
+	
+	// Read first few lines to validate
+	for scanner.Scan() && lineCount < 100 {
+		line := strings.TrimSpace(scanner.Text())
+		lineCount++
+		
+		if line == "" {
+			emptyLines++
+			continue
+		}
+		
+		if len(line) > maxLineLength {
+			maxLineLength = len(line)
+		}
+		
+		// Check for obviously binary content
+		for _, char := range line {
+			if char < 32 && char != '\t' && char != '\n' && char != '\r' {
+				return fmt.Errorf("file contains binary data (invalid character: %d)", char)
+			}
+		}
+	}
+	
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("error reading file: %v", err)
+	}
+	
+	if lineCount == 0 {
+		return fmt.Errorf("file is empty")
+	}
+	
+	if emptyLines == lineCount {
+		return fmt.Errorf("file contains only empty lines")
+	}
+	
+	if maxLineLength > 1000 {
+		return fmt.Errorf("file contains very long lines (max: %d chars), may not be a wordlist", maxLineLength)
+	}
+	
+	return nil
 }
 
 func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
@@ -831,52 +954,107 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 		
 	} else {
 		// wordlist mode
-		wl := strings.TrimSpace(t.Wordlist)
-
-		// FIX: Handle default wordlist properly
+		var wl string
+		
 		if t.UseDefaultWordlist {
-			if wl != "" {
+			// using default wordlist
+			if strings.TrimSpace(t.Wordlist) != "" {
 				t.Status = "error"
 				eventMu.Lock()
-				t.Events = append(t.Events, map[string]any{"error": "Choose either default wordlist or custom upload, not both."})
+				t.Events = append(t.Events, map[string]any{"error": "Cannot use both default wordlist and custom wordlist. Choose one or the other."})
 				eventMu.Unlock()
 				return
 			}
+			
 			wl = "testdata/rockyou-mini.txt"
-
-			// FIX: Check if default wordlist exists
+			
+			// verify default wordlist exists
 			if _, err := os.Stat(wl); os.IsNotExist(err) {
 				t.Status = "error"
 				eventMu.Lock()
-				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Default wordlist not found: %s", wl)})
+				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Default wordlist not found: %s. Please check if the file exists.", wl)})
 				eventMu.Unlock()
 				return
 			}
 		} else {
-			// FIX: Handle custom wordlist paths
+			// using custom wordlist
+			wl = strings.TrimSpace(t.Wordlist)
 			if wl == "" {
 				t.Status = "error"
 				eventMu.Lock()
-				t.Events = append(t.Events, map[string]any{"error": "Wordlist required (default or custom)."})
+				t.Events = append(t.Events, map[string]any{"error": "Custom wordlist required. Please upload a wordlist file or select the default wordlist option."})
 				eventMu.Unlock()
 				return
 			}
-
-			// FIX: Proper path resolution for uploaded files
+			
+			// handle different path formats for uploaded files
+			originalPath := wl
+			
+			// convert web path to filesystem path
 			if strings.HasPrefix(wl, "/uploads/") {
 				wl = strings.TrimPrefix(wl, "/")
+			} else if !strings.Contains(wl, "/") && !strings.Contains(wl, "\\") {
+				// just a filename, assume it's in uploads
+				wl = filepath.Join("uploads", wl)
 			}
-
-			// FIX: Verify custom wordlist exists
-			if _, err := os.Stat(wl); os.IsNotExist(err) {
+			
+			// verify custom wordlist exists and is readable
+			fileInfo, err := os.Stat(wl)
+			if os.IsNotExist(err) {
 				t.Status = "error"
 				eventMu.Lock()
-				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Wordlist file not found: %s", wl)})
+				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Wordlist file not found: %s (original path: %s). Please ensure the file was uploaded correctly.", wl, originalPath)})
+				eventMu.Unlock()
+				return
+			} else if err != nil {
+				t.Status = "error"
+				eventMu.Lock()
+				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Cannot access wordlist file: %s. Error: %v", wl, err)})
+				eventMu.Unlock()
+				return
+			}
+			
+			// check if file is not empty
+			if fileInfo.Size() == 0 {
+				t.Status = "error"
+				eventMu.Lock()
+				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Wordlist file is empty: %s", wl)})
 				eventMu.Unlock()
 				return
 			}
 		}
-
+		
+		// final validation - try to open and read first line
+		file, err := os.Open(wl)
+		if err != nil {
+			t.Status = "error"
+			eventMu.Lock()
+			t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Failed to open wordlist file: %s. Error: %v", wl, err)})
+			eventMu.Unlock()
+			return
+		}
+		
+		scanner := bufio.NewScanner(file)
+		hasContent := false
+		lineCount := 0
+		for scanner.Scan() && lineCount < 5 {
+			line := strings.TrimSpace(scanner.Text())
+			if line != "" {
+				hasContent = true
+				break
+			}
+			lineCount++
+		}
+		file.Close()
+		
+		if !hasContent {
+			t.Status = "error"
+			eventMu.Lock()
+			t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Wordlist file appears to be empty or contains no valid entries: %s", wl)})
+			eventMu.Unlock()
+			return
+		}
+		
 		res, err = c.CrackWordlist(ctx, h, params, t.Target, wl)
 	}
 	
