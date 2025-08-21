@@ -17,7 +17,7 @@
         <div class="logo-section">
           <i class="fas fa-shield-halved"></i>
           <h1>HashCrack</h1>
-          <span class="subtitle">HashCrack - The Swiss Army Knife</span>
+          <span class="subtitle">The Swiss Army Knife</span>
         </div>
         <div class="system-stats" id="stats">
           <div class="stat-item">
@@ -38,5 +38,642 @@
         </div>
       </div>
     </header>
-    </body>
+
+    <main class="main-content">
+      <!-- Create Task Section -->
+      <section class="task-creator">
+        <div class="section-header">
+          <h2><i class="fas fa-plus-circle"></i> Create New Hash Cracking Task</h2>
+          <p class="section-description">Configure your hash cracking parameters below. Each setting affects how the system will attempt to recover the original password.</p>
+        </div>
+
+        <form id="taskForm" class="task-form">
+          <!-- Step 1: Hash Configuration -->
+          <div class="form-step active" id="step1">
+            <div class="step-header">
+              <h3><span class="step-number">1</span> Hash Configuration</h3>
+              <p>Specify the hash you want to crack and its algorithm</p>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">
+                <i class="fas fa-hashtag"></i>
+                Target Hash
+                <span class="help-icon" data-tooltip="The hash value you want to crack. Can be in hex format or algorithm-specific format.">
+                  <i class="fas fa-question-circle"></i>
+                </span>
+              </label>
+              <input name="target" id="target" class="form-input" placeholder="Enter the hash to crack (e.g., 5d41402abc4b2a76b9719d911017c592)" />
+              <div class="input-help">Example: 5d41402abc4b2a76b9719d911017c592 (MD5 of "hello")</div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">
+                <i class="fas fa-cpu"></i>
+                Hash Algorithm
+                <span class="help-icon" data-tooltip="The hashing algorithm used to create the hash. Auto-detect will try to identify it based on the hash format.">
+                  <i class="fas fa-question-circle"></i>
+                </span>
+              </label>
+              <select name="algo" id="algo" class="form-select">
+                <option value="md5">MD5 (128-bit)</option>
+                <option value="sha1">SHA-1 (160-bit)</option>
+                <option value="sha256">SHA-256 (256-bit)</option>
+                <option value="sha384">SHA-384 (384-bit)</option>
+                <option value="sha512">SHA-512 (512-bit)</option>
+                <option value="ntlm">NTLM (Windows)</option>
+                <option value="bcrypt">bcrypt (Adaptive)</option>
+                <option value="scrypt">scrypt (Memory-hard)</option>
+                <option value="argon2id">Argon2id (Modern)</option>
+                <option value="lm">LM Hash (Legacy Windows)</option>
+                <option value="ripemd160">RIPEMD-160</option>
+                <option value="mysql">MySQL Password</option>
+                <option value="cisco">Cisco Type 7</option>
+                <option value="ldap_md5">LDAP MD5</option>
+                <option value="ldap_sha1">LDAP SHA-1</option>
+              </select>
+        <div class="algo-info" id="algoInfo">
+                <div class="detected-info" id="detectedInfo" style="display: none;">
+                  <i class="fas fa-lightbulb"></i>
+          <span>Suggestions: <span id="detectedAlgos"></span></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">
+                <i class="fas fa-grain"></i>
+                Salt (Optional)
+                <span class="help-icon" data-tooltip="Salt is additional data used with the password during hashing to prevent rainbow table attacks. Leave empty if no salt was used.">
+                  <i class="fas fa-question-circle"></i>
+                </span>
+              </label>
+              <input name="salt" class="form-input" placeholder="Enter salt if known (optional)" />
+              <div class="input-help">Only needed for salted hashes. Check your hash source for salt information.</div>
+            </div>
+
+            <div class="form-actions">
+              <button type="button" class="btn btn-primary" onclick="nextStep(2)">
+                Next: Choose Attack Method <i class="fas fa-arrow-right"></i>
+              </button>
+            </div>
+          </div>
+
+          <!-- Step 2: Attack Method -->
+          <div class="form-step" id="step2">
+            <div class="step-header">
+              <h3><span class="step-number">2</span> Attack Method</h3>
+              <p>Choose how you want to attempt cracking the hash</p>
+            </div>
+
+            <div class="attack-methods">
+              <div class="method-card" data-method="wordlist">
+                <div class="method-header">
+                  <i class="fas fa-book"></i>
+                  <h4>Dictionary Attack</h4>
+                  <span class="method-badge recommended">Recommended</span>
+                </div>
+                <p>Try passwords from a wordlist (dictionary). Fast and effective for common passwords.</p>
+                <div class="method-stats">
+                  <span>⚡ Fast</span>
+                  <span>📊 High Success Rate</span>
+                  <span>💾 Low Resource Usage</span>
+                </div>
+              </div>
+
+              <div class="method-card" data-method="mask">
+                <div class="method-header">
+                  <i class="fas fa-mask"></i>
+                  <h4>Mask Attack</h4>
+                </div>
+                <p>Use a pattern-based approach when you know the password structure (e.g., "word" + 2 digits).</p>
+                <div class="method-stats">
+                  <span>🎯 Targeted</span>
+                  <span>⏱️ Medium Speed</span>
+                  <span>🧩 Pattern-Based</span>
+                </div>
+              </div>
+
+              <div class="method-card" data-method="bruteforce">
+                <div class="method-header">
+                  <i class="fas fa-hammer"></i>
+                  <h4>Brute Force</h4>
+                  <span class="method-badge warning">Slow</span>
+                </div>
+                <p>Try all possible combinations. Very thorough but can be extremely slow for longer passwords.</p>
+                <div class="method-stats">
+                  <span>🔄 Exhaustive</span>
+                  <span>🐌 Very Slow</span>
+                  <span>🔋 High Resource Usage</span>
+                </div>
+              </div>
+            </div>
+
+            <input type="hidden" name="mode" id="mode" value="wordlist" />
+
+            <!-- Method-specific configurations -->
+            <div class="method-config mode-wordlist">
+              <h4><i class="fas fa-cog"></i> Dictionary Configuration</h4>
+              
+              <div class="form-group">
+                <label class="form-label">Wordlist Source</label>
+                <div class="wordlist-options">
+                  <label class="radio-option">
+                    <input type="radio" name="wordlist_source" value="default" checked />
+                    <div class="radio-content">
+                      <i class="fas fa-database"></i>
+                      <span>Use Built-in Wordlist</span>
+                      <small>Curated list of common passwords</small>
+                    </div>
+                  </label>
+                  <label class="radio-option">
+                    <input type="radio" name="wordlist_source" value="upload" />
+                    <div class="radio-content">
+                      <i class="fas fa-upload"></i>
+                      <span>Upload Custom Wordlist</span>
+                      <small>Use your own .txt or .lst file</small>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <div class="upload-section" id="uploadSection" style="display: none;">
+                <div class="upload-area">
+                  <input type="file" id="uploadFile" accept=".txt,.lst" style="display: none;" />
+                  <div class="upload-placeholder" onclick="document.getElementById('uploadFile').click()">
+                    <i class="fas fa-cloud-upload-alt"></i>
+                    <span>Click to select wordlist file</span>
+                    <small>Supports .txt and .lst files (max 10MB)</small>
+                  </div>
+                  <button type="button" id="uploadBtn" class="btn btn-secondary" style="display: none;">
+                    <i class="fas fa-upload"></i> Upload File
+                  </button>
+                </div>
+                <input name="wordlist" id="wordlist" type="hidden" />
+                <input name="use_default_wordlist" id="useDefault" type="hidden" />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">
+                  Password Transformation Rules
+                  <span class="help-icon" data-tooltip="Apply common transformations to dictionary words (e.g., capitalize, add numbers) to increase chances of success.">
+                    <i class="fas fa-question-circle"></i>
+                  </span>
+                </label>
+                <div class="rules-grid">
+                  <label class="rule-option">
+                    <input type="checkbox" name="rules" value="+u" />
+                    <div class="rule-content">
+                      <i class="fas fa-font"></i>
+                      <span>UPPERCASE</span>
+                      <small>Convert to uppercase</small>
+                    </div>
+                  </label>
+                  <label class="rule-option">
+                    <input type="checkbox" name="rules" value="+l" />
+                    <div class="rule-content">
+                      <i class="fas fa-font"></i>
+                      <span>lowercase</span>
+                      <small>Convert to lowercase</small>
+                    </div>
+                  </label>
+                  <label class="rule-option">
+                    <input type="checkbox" name="rules" value="+c" />
+                    <div class="rule-content">
+                      <i class="fas fa-font"></i>
+                      <span>Capitalize</span>
+                      <small>First letter uppercase</small>
+                    </div>
+                  </label>
+                  <label class="rule-option">
+                    <input type="checkbox" name="rules" value="+d1" />
+                    <div class="rule-content">
+                      <i class="fas fa-plus"></i>
+                      <span>Add 0-9</span>
+                      <small>Append single digit</small>
+                    </div>
+                  </label>
+                  <label class="rule-option">
+                    <input type="checkbox" name="rules" value="+d2" />
+                    <div class="rule-content">
+                      <i class="fas fa-plus"></i>
+                      <span>Add 00-99</span>
+                      <small>Append two digits</small>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div class="method-config mode-mask" style="display: none;">
+              <h4><i class="fas fa-cog"></i> Mask Configuration</h4>
+              <div class="form-group">
+                <label class="form-label">
+                  Password Mask Pattern
+                  <span class="help-icon" data-tooltip="Use patterns like ?l for lowercase, ?u for uppercase, ?d for digits, ?s for symbols. Example: ?l?l?l?d?d for 3 letters + 2 digits.">
+                    <i class="fas fa-question-circle"></i>
+                  </span>
+                </label>
+                <input name="mask" class="form-input" placeholder="e.g., ?l?l?l?l?d?d (4 letters + 2 digits)" />
+                <div class="mask-help">
+                  <strong>Pattern Reference:</strong>
+                  <span class="mask-ref">?l = lowercase</span>
+                  <span class="mask-ref">?u = uppercase</span>
+                  <span class="mask-ref">?d = digit</span>
+                  <span class="mask-ref">?s = symbol</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="method-config mode-bruteforce" style="display: none;">
+              <h4><i class="fas fa-cog"></i> Brute Force Configuration</h4>
+              <div class="form-group">
+                <label class="form-label">
+                  Character Set
+                  <span class="help-icon" data-tooltip="Characters to use in brute force attempts. Use common sets or define your own.">
+                    <i class="fas fa-question-circle"></i>
+                  </span>
+                </label>
+                <div class="charset-presets">
+                  <button type="button" class="preset-btn" onclick="setCharset('abcdefghijklmnopqrstuvwxyz')">Lowercase</button>
+                  <button type="button" class="preset-btn" onclick="setCharset('ABCDEFGHIJKLMNOPQRSTUVWXYZ')">Uppercase</button>
+                  <button type="button" class="preset-btn" onclick="setCharset('0123456789')">Numbers</button>
+                  <button type="button" class="preset-btn" onclick="setCharset('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789')">Alphanumeric</button>
+                </div>
+                <input name="bf_chars" class="form-input" placeholder="Enter characters to use in brute force" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Password Length Range</label>
+                <div class="length-inputs">
+                  <div class="length-input">
+                    <label>Minimum</label>
+                    <input name="bf_min" type="number" min="1" value="1" class="form-input" />
+                  </div>
+                  <div class="length-separator">to</div>
+                  <div class="length-input">
+                    <label>Maximum</label>
+                    <input name="bf_max" type="number" min="1" value="6" class="form-input" />
+                  </div>
+                </div>
+                <div class="complexity-warning" id="complexityWarning">
+                  <i class="fas fa-exclamation-triangle"></i>
+                  <span>Estimated attempts: <span id="estimatedAttempts">0</span></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-actions">
+              <button type="button" class="btn btn-secondary" onclick="prevStep(1)">
+                <i class="fas fa-arrow-left"></i> Back
+              </button>
+              <button type="button" class="btn btn-primary" onclick="nextStep(3)">
+                Next: Advanced Settings <i class="fas fa-arrow-right"></i>
+              </button>
+            </div>
+          </div>
+
+          <!-- Step 3: Advanced Settings -->
+          <div class="form-step" id="step3">
+            <div class="step-header">
+              <h3><span class="step-number">3</span> Advanced Settings</h3>
+              <p>Fine-tune performance and algorithm-specific parameters</p>
+            </div>
+
+            <div class="advanced-settings">
+              <div class="setting-group">
+                <h4><i class="fas fa-tachometer-alt"></i> Performance Settings</h4>
+                <div class="form-group">
+                  <label class="form-label">
+                    Worker Threads
+                    <span class="help-icon" data-tooltip="Number of parallel threads to use. More threads = faster processing but higher resource usage. Recommended: number of CPU cores.">
+                      <i class="fas fa-question-circle"></i>
+                    </span>
+                  </label>
+                  <div class="worker-slider">
+                    <input name="workers" type="range" min="1" max="16" value="1" class="slider" id="workerSlider" />
+                    <div class="slider-labels">
+                      <span>1</span>
+                      <span id="workerValue">1</span>
+                      <span>16</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="setting-group algorithm-specific" id="algorithmSettings">
+                <h4><i class="fas fa-sliders-h"></i> Algorithm-Specific Parameters</h4>
+                <div class="algo-params" id="bcryptParams" style="display: none;">
+                  <div class="form-group">
+                    <label class="form-label">bcrypt Cost Factor (4-31)</label>
+                    <input name="bcrypt_cost" type="number" min="4" max="31" placeholder="12" class="form-input" />
+                    <div class="input-help">Higher values = more secure but slower to crack</div>
+                  </div>
+                </div>
+                <div class="algo-params" id="scryptParams" style="display: none;">
+                  <div class="form-group">
+                    <label class="form-label">scrypt Parameters</label>
+                    <div class="param-grid">
+                      <input name="scrypt_n" type="number" placeholder="N (32768)" class="form-input" />
+                      <input name="scrypt_r" type="number" placeholder="r (8)" class="form-input" />
+                      <input name="scrypt_p" type="number" placeholder="p (1)" class="form-input" />
+                    </div>
+                  </div>
+                </div>
+                <div class="algo-params" id="argonParams" style="display: none;">
+                  <div class="form-group">
+                    <label class="form-label">Argon2 Parameters</label>
+                    <div class="param-grid">
+                      <input name="argon_time" type="number" placeholder="Time cost" class="form-input" />
+                      <input name="argon_mem_kb" type="number" placeholder="Memory (KB)" class="form-input" />
+                      <input name="argon_par" type="number" placeholder="Parallelism" class="form-input" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-actions">
+              <button type="button" class="btn btn-secondary" onclick="prevStep(2)">
+                <i class="fas fa-arrow-left"></i> Back
+              </button>
+              <button type="submit" class="btn btn-success">
+                <i class="fas fa-play"></i> Start Cracking Task
+              </button>
+            </div>
+          </div>
+        </form>
+      </section>
+
+      <!-- Tasks Section -->
+      <section class="tasks-section">
+        <div class="section-header">
+          <h2><i class="fas fa-tasks"></i> Active Tasks</h2>
+          <p class="section-description">Monitor the progress of your hash cracking tasks</p>
+        </div>
+        
+        <div class="tasks-container">
+          <div id="no-tasks" class="no-tasks">
+            <i class="fas fa-clipboard-list"></i>
+            <h3>No tasks yet</h3>
+            <p>Create your first hash cracking task above to get started</p>
+          </div>
+          <div class="tasks-table-container" id="tasksContainer" style="display: none;">
+            <table id="tasks" class="tasks-table">
+              <thead>
+                <tr>
+                  <th>Task ID</th>
+                  <th>Algorithm</th>
+                  <th>Status</th>
+                  <th>Progress</th>
+                  <th>Result</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  
+  <!-- Load the fixed app.js middleware -->
+  <script src="/static/app.js"></script>
+  
+  <!-- Page-specific scripts -->
+  <script>
+    let currentStep = 1;
+    let selectedMethod = 'wordlist';
+
+    function nextStep(step) {
+      if (validateCurrentStep()) {
+        showStep(step);
+      }
+    }
+
+    function prevStep(step) {
+      showStep(step);
+    }
+
+    function showStep(step) {
+      document.querySelectorAll('.form-step').forEach(s => s.classList.remove('active'));
+      document.getElementById(`step${step}`).classList.add('active');
+      currentStep = step;
+    }
+
+    function validateCurrentStep() {
+      if (currentStep === 1) {
+        const target = document.getElementById('target').value.trim();
+        if (!target) {
+          showToast('Please enter a target hash', 'error');
+          return false;
+        }
+      }
+      return true;
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+      const methodCards = document.querySelectorAll('.method-card');
+      methodCards.forEach(card => {
+        card.addEventListener('click', function() {
+          methodCards.forEach(c => c.classList.remove('selected'));
+          this.classList.add('selected');
+          selectedMethod = this.dataset.method;
+          document.getElementById('mode').value = selectedMethod;
+          updateMethodConfig();
+        });
+      });
+
+      if (methodCards.length > 0) {
+        methodCards[0].classList.add('selected');
+      }
+    });
+
+    function updateMethodConfig() {
+      document.querySelectorAll('.method-config').forEach(config => {
+        config.style.display = 'none';
+      });
+      
+      const activeConfig = document.querySelector(`.mode-${selectedMethod}`);
+      if (activeConfig) {
+        activeConfig.style.display = 'block';
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+      const radioOptions = document.querySelectorAll('input[name="wordlist_source"]');
+      radioOptions.forEach(radio => {
+        radio.addEventListener('change', function() {
+          const uploadSection = document.getElementById('uploadSection');
+          const useDefault = document.getElementById('useDefault');
+          
+          if (this.value === 'upload') {
+            uploadSection.style.display = 'block';
+            useDefault.value = 'false';
+          } else {
+            uploadSection.style.display = 'none';
+            useDefault.value = 'true';
+          }
+        });
+      });
+      
+      const useDefaultEl = document.getElementById('useDefault');
+      if (useDefaultEl) {
+        useDefaultEl.value = 'true';
+      }
+    });
+
+    document.addEventListener('DOMContentLoaded', function() {
+      const uploadFile = document.getElementById('uploadFile');
+      if (uploadFile) {
+        uploadFile.addEventListener('change', function() {
+          const uploadBtn = document.getElementById('uploadBtn');
+          if (this.files.length > 0) {
+            uploadBtn.style.display = 'block';
+            document.querySelector('.upload-placeholder span').textContent = this.files[0].name;
+          }
+        });
+      }
+    });
+
+    function setCharset(charset) {
+      document.querySelector('input[name="bf_chars"]').value = charset;
+      updateComplexityWarning();
+    }
+
+  function updateComplexityWarning() {
+      const charsInput = document.querySelector('input[name="bf_chars"]');
+      const minInput = document.querySelector('input[name="bf_min"]');
+      const maxInput = document.querySelector('input[name="bf_max"]');
+      
+      if (!charsInput || !minInput || !maxInput) return;
+      
+      const chars = Math.max(0, charsInput.value.length);
+      const min = Math.max(1, parseInt(minInput.value) || 1);
+      const max = Math.max(min, parseInt(maxInput.value) || min);
+      
+      let total = 0;
+      if (chars > 1) {
+        const a = Math.pow(chars, min);
+        const n = max - min + 1;
+        total = Math.round(a * (Math.pow(chars, n) - 1) / (chars - 1));
+      } else if (chars === 1) {
+        total = max - min + 1;
+      } else {
+        total = 0;
+      }
+      
+      const estimatedAttempts = document.getElementById('estimatedAttempts');
+      if (estimatedAttempts) {
+        estimatedAttempts.textContent = total.toLocaleString();
+      }
+      
+      const warning = document.getElementById('complexityWarning');
+      if (warning) {
+        if (total > 1000000) {
+          warning.style.color = 'var(--error-color)';
+        } else if (total > 100000) {
+          warning.style.color = 'var(--warning-color)';
+        } else {
+          warning.style.color = 'var(--success-color)';
+        }
+      }
+  }
+
+    // Worker slider
+    document.addEventListener('DOMContentLoaded', function() {
+      const workerSlider = document.getElementById('workerSlider');
+      if (workerSlider) {
+        workerSlider.addEventListener('input', function() {
+          const workerValue = document.getElementById('workerValue');
+          if (workerValue) {
+            workerValue.textContent = this.value;
+          }
+        });
+      }
+    });
+
+    document.addEventListener('DOMContentLoaded', function() {
+      const algoSelect = document.getElementById('algo');
+      if (algoSelect) {
+        algoSelect.addEventListener('change', function() {
+          const algo = this.value;
+          document.querySelectorAll('.algo-params').forEach(p => p.style.display = 'none');
+          
+          if (algo === 'bcrypt') {
+            const bcryptParams = document.getElementById('bcryptParams');
+            if (bcryptParams) bcryptParams.style.display = 'block';
+          } else if (algo === 'scrypt') {
+            const scryptParams = document.getElementById('scryptParams');
+            if (scryptParams) scryptParams.style.display = 'block';
+          } else if (algo === 'argon2id') {
+            const argonParams = document.getElementById('argonParams');
+            if (argonParams) argonParams.style.display = 'block';
+          }
+        });
+      }
+    });
+
+    document.addEventListener('DOMContentLoaded', function() {
+      const targetInput = document.getElementById('target');
+      if (targetInput) {
+        const updateSuggestions = async () => {
+          const target = targetInput.value.trim();
+          if (!target) return;
+          try {
+            const r = await fetch('/api/detect?target=' + encodeURIComponent(target));
+            const j = await r.json();
+            if (j.candidates && j.candidates.length) {
+              const detectedInfo = document.getElementById('detectedInfo');
+              const detectedAlgos = document.getElementById('detectedAlgos');
+              if (detectedInfo && detectedAlgos) {
+                detectedAlgos.textContent = j.candidates.join(', ');
+                detectedInfo.style.display = 'flex';
+              }
+            }
+          } catch (e) {
+            console.error('Failed to detect algorithm:', e);
+          }
+        };
+        targetInput.addEventListener('blur', updateSuggestions);
+      }
+    });
+
+    document.addEventListener('DOMContentLoaded', function() {
+      updateMethodConfig();
+      
+      const bfInputs = ['bf_chars', 'bf_min', 'bf_max'];
+      bfInputs.forEach(id => {
+        const input = document.querySelector(`input[name="${id}"]`);
+        if (input) {
+          input.addEventListener('input', updateComplexityWarning);
+        }
+      });
+    });
+
+    // trying SSE for real-time updates (optional enhancement)
+    document.addEventListener('DOMContentLoaded', function() {
+      try {
+        const eventSource = new EventSource('/api/events');
+        eventSource.addEventListener('tasks', (e) => {
+          try {
+            const tasks = JSON.parse(e.data);
+            if (window.renderTasks) {
+              window.renderTasks(tasks);
+            }
+          } catch (err) {
+            console.error('Failed to parse SSE data:', err);
+          }
+        });
+        
+        eventSource.onerror = (err) => {
+          console.warn('SSE connection error, falling back to polling:', err);
+          eventSource.close();
+        };
+      } catch (err) {
+        console.warn('SSE not supported or failed:', err);
+      }
+    });
+  </script>
+</body>
 </html>
