@@ -33,9 +33,7 @@
             <span id="memory">Loading...</span>
           </div>
         </div>
-        <div class="task-stats" id="task-stats">
-          <!-- Task stats will be populated by JavaScript -->
-        </div>
+        <div class="task-stats" id="task-stats"></div>
       </div>
     </header>
 
@@ -92,10 +90,10 @@
                 <option value="ldap_md5">LDAP MD5</option>
                 <option value="ldap_sha1">LDAP SHA-1</option>
               </select>
-        <div class="algo-info" id="algoInfo">
+              <div class="algo-info" id="algoInfo">
                 <div class="detected-info" id="detectedInfo" style="display: none;">
                   <i class="fas fa-lightbulb"></i>
-          <span>Suggestions: <span id="detectedAlgos"></span></span>
+                  <span>Suggestions: <span id="detectedAlgos"></span></span>
                 </div>
               </div>
             </div>
@@ -197,20 +195,24 @@
                 </div>
               </div>
 
+              <!-- FIX: Improved upload section structure -->
               <div class="upload-section" id="uploadSection" style="display: none;">
                 <div class="upload-area">
                   <input type="file" id="uploadFile" accept=".txt,.lst" style="display: none;" />
-                  <div class="upload-placeholder" onclick="document.getElementById('uploadFile').click()">
+                  <div class="upload-placeholder" id="uploadPlaceholder" onclick="document.getElementById('uploadFile').click()">
                     <i class="fas fa-cloud-upload-alt"></i>
-                    <span>Click to select wordlist file</span>
+                    <span id="uploadText">Click to select wordlist file</span>
                     <small>Supports .txt and .lst files (max 10MB)</small>
                   </div>
-                  <button type="button" id="uploadBtn" class="btn btn-secondary" style="display: none;">
-                    <i class="fas fa-upload"></i> Upload File
-                  </button>
+                  <div class="upload-controls" id="uploadControls" style="display: none;">
+                    <span class="upload-filename" id="uploadFilename"></span>
+                    <button type="button" id="uploadBtn" class="btn btn-secondary">
+                      <i class="fas fa-upload"></i> Upload File
+                    </button>
+                  </div>
                 </div>
                 <input name="wordlist" id="wordlist" type="hidden" />
-                <input name="use_default_wordlist" id="useDefault" type="hidden" />
+                <input name="use_default_wordlist" id="useDefault" type="hidden" value="false" />
               </div>
 
               <div class="form-group">
@@ -360,7 +362,8 @@
                 </div>
               </div>
 
-              <div class="setting-group algorithm-specific" id="algorithmSettings">
+              <!-- FIX: Only show algorithm settings when needed -->
+              <div class="setting-group algorithm-specific" id="algorithmSettings" style="display: none;">
                 <h4><i class="fas fa-sliders-h"></i> Algorithm-Specific Parameters</h4>
                 <div class="algo-params" id="bcryptParams" style="display: none;">
                   <div class="form-group">
@@ -437,7 +440,6 @@
     </main>
   </div>
   
-  <!-- Load the fixed app.js middleware -->
   <script src="/static/app.js"></script>
   
   <!-- Page-specific scripts -->
@@ -500,19 +502,22 @@
       }
     }
 
+    // FIX: Improved wordlist source handling
     document.addEventListener('DOMContentLoaded', function() {
       const radioOptions = document.querySelectorAll('input[name="wordlist_source"]');
       radioOptions.forEach(radio => {
         radio.addEventListener('change', function() {
           const uploadSection = document.getElementById('uploadSection');
           const useDefault = document.getElementById('useDefault');
+          const wordlistInput = document.getElementById('wordlist');
           
           if (this.value === 'upload') {
             uploadSection.style.display = 'block';
-            useDefault.value = 'false';
+            if (useDefault) useDefault.value = 'false';
           } else {
             uploadSection.style.display = 'none';
-            useDefault.value = 'true';
+            if (useDefault) useDefault.value = 'true';
+            if (wordlistInput) wordlistInput.value = '';
           }
         });
       });
@@ -523,25 +528,12 @@
       }
     });
 
-    document.addEventListener('DOMContentLoaded', function() {
-      const uploadFile = document.getElementById('uploadFile');
-      if (uploadFile) {
-        uploadFile.addEventListener('change', function() {
-          const uploadBtn = document.getElementById('uploadBtn');
-          if (this.files.length > 0) {
-            uploadBtn.style.display = 'block';
-            document.querySelector('.upload-placeholder span').textContent = this.files[0].name;
-          }
-        });
-      }
-    });
-
     function setCharset(charset) {
       document.querySelector('input[name="bf_chars"]').value = charset;
       updateComplexityWarning();
     }
 
-  function updateComplexityWarning() {
+    function updateComplexityWarning() {
       const charsInput = document.querySelector('input[name="bf_chars"]');
       const minInput = document.querySelector('input[name="bf_min"]');
       const maxInput = document.querySelector('input[name="bf_max"]');
@@ -578,9 +570,8 @@
           warning.style.color = 'var(--success-color)';
         }
       }
-  }
+    }
 
-    // Worker slider
     document.addEventListener('DOMContentLoaded', function() {
       const workerSlider = document.getElementById('workerSlider');
       if (workerSlider) {
@@ -593,26 +584,40 @@
       }
     });
 
+    // FIX: algorithm settings only show for algorithms with parameters
     document.addEventListener('DOMContentLoaded', function() {
       const algoSelect = document.getElementById('algo');
       if (algoSelect) {
+        updateAlgorithmSettings(algoSelect.value);
+        
         algoSelect.addEventListener('change', function() {
-          const algo = this.value;
-          document.querySelectorAll('.algo-params').forEach(p => p.style.display = 'none');
-          
-          if (algo === 'bcrypt') {
-            const bcryptParams = document.getElementById('bcryptParams');
-            if (bcryptParams) bcryptParams.style.display = 'block';
-          } else if (algo === 'scrypt') {
-            const scryptParams = document.getElementById('scryptParams');
-            if (scryptParams) scryptParams.style.display = 'block';
-          } else if (algo === 'argon2id') {
-            const argonParams = document.getElementById('argonParams');
-            if (argonParams) argonParams.style.display = 'block';
-          }
+          updateAlgorithmSettings(this.value);
         });
       }
     });
+    
+    function updateAlgorithmSettings(algo) {
+      const algorithmSettings = document.getElementById('algorithmSettings');
+      
+      document.querySelectorAll('.algo-params').forEach(p => p.style.display = 'none');
+      
+      const hasParams = ['bcrypt', 'scrypt', 'argon2id'].includes(algo);
+      
+      if (algorithmSettings) {
+        algorithmSettings.style.display = hasParams ? 'block' : 'none';
+      }
+      
+      if (algo === 'bcrypt') {
+        const bcryptParams = document.getElementById('bcryptParams');
+        if (bcryptParams) bcryptParams.style.display = 'block';
+      } else if (algo === 'scrypt') {
+        const scryptParams = document.getElementById('scryptParams');
+        if (scryptParams) scryptParams.style.display = 'block';
+      } else if (algo === 'argon2id') {
+        const argonParams = document.getElementById('argonParams');
+        if (argonParams) argonParams.style.display = 'block';
+      }
+    }
 
     document.addEventListener('DOMContentLoaded', function() {
       const targetInput = document.getElementById('target');
@@ -651,7 +656,7 @@
       });
     });
 
-    // trying SSE for real-time updates (optional enhancement)
+    // SSE for real-time updates
     document.addEventListener('DOMContentLoaded', function() {
       try {
         const eventSource = new EventSource('/api/events');
