@@ -68,6 +68,18 @@ type TaskProgress struct {
 	CPUPercent        float64   `json:"cpu_percent"`
 	MemoryMB          float64   `json:"memory_mb"`
 	LastUpdated       time.Time `json:"last_updated"`
+	
+	// Internal fields for stable statistics calculation
+	startTime         time.Time     `json:"-"`
+	speedHistory      []speedSample `json:"-"`
+	lastSpeedUpdate   time.Time     `json:"-"`
+	avgWindow         time.Duration `json:"-"`
+}
+
+type speedSample struct {
+	timestamp time.Time
+	tried     uint64
+	speed     float64
 }
 
 // update progress safely
@@ -97,6 +109,81 @@ func (t *Task) GetProgress() *TaskProgress {
 	// copy to avoid races
 	p := *t.Progress
 	return &p
+}
+
+// updateStableSpeed calculates a more stable hash rate using moving average
+func (p *TaskProgress) updateStableSpeed(tried uint64, now time.Time) {
+	if p.avgWindow == 0 {
+		p.avgWindow = 30 * time.Second // 30 second rolling window
+	}
+	
+	if p.startTime.IsZero() {
+		p.startTime = now
+		p.lastSpeedUpdate = now
+		return
+	}
+	
+	// Calculate instantaneous speed if enough time has passed
+	timeSinceLastUpdate := now.Sub(p.lastSpeedUpdate)
+	if timeSinceLastUpdate >= 2*time.Second { // Update every 2 seconds minimum
+		
+		// Calculate overall average speed from start
+		totalTime := now.Sub(p.startTime).Seconds()
+		overallSpeed := float64(tried) / totalTime
+		
+		// Add sample to history
+		sample := speedSample{
+			timestamp: now,
+			tried:     tried,
+			speed:     overallSpeed,
+		}
+		p.speedHistory = append(p.speedHistory, sample)
+		
+		// Remove old samples outside the window
+		cutoff := now.Add(-p.avgWindow)
+		validSamples := p.speedHistory[:0]
+		for _, s := range p.speedHistory {
+			if s.timestamp.After(cutoff) {
+				validSamples = append(validSamples, s)
+			}
+		}
+		p.speedHistory = validSamples
+		
+		// Calculate weighted moving average
+		if len(p.speedHistory) > 0 {
+			totalWeight := 0.0
+			weightedSum := 0.0
+			
+			for i, sample := range p.speedHistory {
+				// Give more weight to recent samples
+				weight := float64(i+1) / float64(len(p.speedHistory))
+				totalWeight += weight
+				weightedSum += sample.speed * weight
+			}
+			
+			if totalWeight > 0 {
+				p.AttemptsPerSecond = weightedSum / totalWeight
+			}
+		}
+		
+		p.lastSpeedUpdate = now
+	}
+}
+
+// calculateStableETA provides a more stable ETA calculation
+func (p *TaskProgress) calculateStableETA() {
+	if p.Total > 0 && p.AttemptsPerSecond > 0 && p.Tried < p.Total {
+		remaining := p.Total - p.Tried
+		p.ETASeconds = float64(remaining) / p.AttemptsPerSecond
+		
+		// Cap unrealistic ETAs
+		maxETA := 365 * 24 * 3600.0 // 1 year max
+		if p.ETASeconds > maxETA {
+			p.ETASeconds = maxETA
+		}
+	} else {
+		p.ETASeconds = 0
+	}
 }
 
 type Manager struct {
@@ -328,16 +415,6 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		
-		// Validate algorithm and target format early to prevent starting bad tasks
-		if ok, msg := hashes.Validate(algo, req.Target); !ok {
-			reason := msg
-			if strings.TrimSpace(reason) == "" {
-				reason = "algorithm does not match target hash format"
-			}
-			http.Error(w, fmt.Sprintf("invalid hash for %s: %s", algo, reason), 400)
-			return
-		}
-
 		h, err := hashes.Get(algo)
 		if err != nil {
 			http.Error(w, err.Error(), 400)
@@ -769,8 +846,6 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 	
 	eventMu := sync.Mutex{}
 	var startTime time.Time
-	var lastProgressTime time.Time
-	var lastTriedCount uint64
 	
 	// Clamp workers: minimum 1, max NumCPU
 	w := t.Workers
@@ -783,7 +858,12 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 	
 	// Initialize progress tracking
 	t.UpdateProgress(func(p *TaskProgress) {
-		p.LastUpdated = time.Now()
+		now := time.Now()
+		p.LastUpdated = now
+		p.startTime = now
+		p.lastSpeedUpdate = now
+		p.avgWindow = 30 * time.Second
+		p.speedHistory = make([]speedSample, 0, 100) // Pre-allocate for efficiency
 	})
 	
 	c := cracker.New(cracker.Options{
@@ -797,7 +877,6 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 			switch event {
 			case "start":
 				startTime = time.Now()
-				lastProgressTime = startTime
 				t.StartedAt = &startTime
 				
 				t.UpdateProgress(func(p *TaskProgress) {
@@ -813,25 +892,20 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 					if tried, ok := kv["tried"].(uint64); ok {
 						p.Tried = tried
 						
-						// Calculate attempts per second
-						if !lastProgressTime.IsZero() {
-							timeDiff := now.Sub(lastProgressTime).Seconds()
-							triedDiff := tried - lastTriedCount
-							if timeDiff > 0 {
-								p.AttemptsPerSecond = float64(triedDiff) / timeDiff
-							}
-						}
+						// Use stable speed calculation
+						p.updateStableSpeed(tried, now)
 						
-						// Calculate ETA
-						if p.Total > 0 && p.AttemptsPerSecond > 0 {
-							remaining := p.Total - tried
-							p.ETASeconds = float64(remaining) / p.AttemptsPerSecond
-						}
+						// Calculate stable ETA
+						p.calculateStableETA()
 					}
 					
 					if percent, ok := kv["progress_percent"].(float64); ok {
 						p.ProgressPercent = percent
+					} else if p.Total > 0 {
+						// Calculate progress percentage if not provided
+						p.ProgressPercent = float64(p.Tried) / float64(p.Total) * 100
 					}
+					
 					if candidate, ok := kv["candidate"].(string); ok {
 						p.CurrentCandidate = candidate
 					}
@@ -839,17 +913,15 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 						p.CurrentLength = length
 					}
 					
-					// Update system metrics
+					// Update system metrics less frequently to reduce noise
 					var mem runtime.MemStats
 					runtime.ReadMemStats(&mem)
 					p.MemoryMB = float64(mem.Alloc) / 1024 / 1024
 					p.CPUPercent = float64(runtime.NumGoroutine()) / float64(runtime.NumCPU()) * 10
 				})
-				
-				lastProgressTime = now
-				lastTriedCount, _ = kv["tried"].(uint64)
 			}
 		},
+		ProgressEvery: 5000, // More frequent updates for stable statistics
 		Transform: buildTransform(t.Rules),
 	})
 	defer c.Close()
@@ -903,51 +975,49 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 			
 			t.UpdateProgress(func(p *TaskProgress) {
 				p.Tried = tried
-				// Set total once; keep it stable so ETA doesn't fluctuate
+				
+				// Set total once and keep it stable
 				if p.Total == 0 && total > 0 {
 					p.Total = total
 				}
 				
-				// Calculate speed and ETA
-				if !lastProgressTime.IsZero() {
-					timeDiff := now.Sub(lastProgressTime).Seconds()
-					triedDiff := tried - lastTriedCount
-					if timeDiff > 0 {
-						p.AttemptsPerSecond = float64(triedDiff) / timeDiff
-					}
-				}
+				// Use stable speed calculation
+				p.updateStableSpeed(tried, now)
 				
+				// Calculate stable progress and ETA
 				if p.Total > 0 {
 					p.ProgressPercent = float64(tried) / float64(p.Total) * 100
-					if p.AttemptsPerSecond > 0 {
-						remaining := p.Total - tried
-						p.ETASeconds = float64(remaining) / p.AttemptsPerSecond
-					}
 				}
+				p.calculateStableETA()
 				
 				p.CurrentCandidate = candidate
 				p.CurrentLength = currentLength
 				
-				// Update system metrics
-				var mem runtime.MemStats
-				runtime.ReadMemStats(&mem)
-				p.MemoryMB = float64(mem.Alloc) / 1024 / 1024
+				// Update system metrics less frequently
+				if now.Sub(p.LastUpdated) >= 5*time.Second {
+					var mem runtime.MemStats
+					runtime.ReadMemStats(&mem)
+					p.MemoryMB = float64(mem.Alloc) / 1024 / 1024
+				}
 			})
 			
-			lastProgressTime = now
-			lastTriedCount = tried
 			
-			// Log event
-			eventMu.Lock()
-			t.Events = append(t.Events, map[string]any{
-				"event":           "progress",
-				"tried":           tried,
-				"total":           total,
-				"progress_percent": float64(tried) / float64(total) * 100,
-				"candidate":       candidate,
-				"current_length":  currentLength,
-			})
-			eventMu.Unlock()
+			// Log event with stable progress
+			progress := t.GetProgress()
+			if progress != nil {
+				eventMu.Lock()
+				t.Events = append(t.Events, map[string]any{
+					"event":             "progress",
+					"tried":             tried,
+					"total":             progress.Total,
+					"progress_percent":  progress.ProgressPercent,
+					"attempts_per_second": progress.AttemptsPerSecond,
+					"eta_seconds":       progress.ETASeconds,
+					"candidate":         candidate,
+					"current_length":    currentLength,
+				})
+				eventMu.Unlock()
+			}
 		})
 		
 		if bfErr != nil {
@@ -1088,8 +1158,18 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 		p.Tried = res.Tried
 		if p.Total > 0 {
 			p.ProgressPercent = float64(res.Tried) / float64(p.Total) * 100
+		} else {
+			p.ProgressPercent = 100.0 // Task completed
 		}
 		p.ETASeconds = 0 // Task is complete
+		
+		// Final speed calculation
+		if !p.startTime.IsZero() {
+			totalTime := time.Since(p.startTime).Seconds()
+			if totalTime > 0 {
+				p.AttemptsPerSecond = float64(res.Tried) / totalTime
+			}
+		}
 	})
 }
 
