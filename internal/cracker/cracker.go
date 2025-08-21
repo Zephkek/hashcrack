@@ -99,6 +99,9 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 	var plaintext atomic.Value
 
 	workChan := make(chan string, workers*8)
+	// Optional fast paths
+	bc, _ := h.(hashes.ByteComparer)
+	bbc, _ := h.(hashes.BatchByteComparer)
 	
 	// added: sync.WaitGroup  per worker
 	var wg sync.WaitGroup
@@ -107,6 +110,8 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 		go func() {
 			defer wg.Done()
 			localTried := uint64(0)
+			// micro-batch for SIMD lanes
+			const lane = 16
 			
 			for {
 				select {
@@ -129,41 +134,62 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 							candidates = xs 
 						}
 					}
-					
-					for _, cand := range candidates {
-						if found.Load() { 
-							break 
-						}
-						
-						ok, _ := h.Compare(target, cand, p)
-						localTried++
-						
-						if ok {
-							plaintext.Store(cand)
-							found.Store(true)
-							cancel()
-							
-							globalCount := atomic.AddUint64(&tried, localTried)
-							c.logEvent("found", map[string]any{
-								"candidate": cand, 
-								"tried": globalCount,
-							})
-							return
-						}
-						// batch them all and process
-						if localTried%1000 == 0 {
-							globalCount := atomic.AddUint64(&tried, 1000)
-							localTried = 0 
-							
-							// More frequent and consistent progress reporting
-							every := c.opts.ProgressEvery
-							if every == 0 { every = 5000 } // Smaller default for more stable updates
-							if globalCount%every == 0 { 
-								c.logEvent("progress", map[string]any{
-									"tried": globalCount,
-									"candidate": cand,
-								}) 
+					// fast path with batch compare if available
+					if bbc != nil {
+						bufBatch := make([][]byte, 0, lane)
+						for i := 0; i < len(candidates); i++ {
+							if found.Load() { break }
+							bufBatch = append(bufBatch, []byte(candidates[i]))
+							localTried++
+							if len(bufBatch) == lane || i+1 == len(candidates) {
+								if idx, _ := bbc.CompareBatchHex(target, bufBatch, p); idx >= 0 {
+									cand := string(bufBatch[idx])
+									plaintext.Store(cand)
+									found.Store(true)
+									cancel()
+									globalCount := atomic.AddUint64(&tried, localTried)
+									c.logEvent("found", map[string]any{"candidate": cand, "tried": globalCount})
+									return
+								}
+								bufBatch = bufBatch[:0]
 							}
+						}
+					} else if bc != nil {
+						for _, cand := range candidates {
+							if found.Load() { break }
+							if ok, _ := bc.CompareBytes(target, []byte(cand), p); ok {
+								plaintext.Store(cand)
+								found.Store(true)
+								cancel()
+								globalCount := atomic.AddUint64(&tried, localTried+1)
+								c.logEvent("found", map[string]any{"candidate": cand, "tried": globalCount})
+								return
+							}
+							localTried++
+						}
+					} else {
+						for _, cand := range candidates {
+							if found.Load() { break }
+							ok, _ := h.Compare(target, cand, p)
+							localTried++
+							if ok {
+								plaintext.Store(cand)
+								found.Store(true)
+								cancel()
+								globalCount := atomic.AddUint64(&tried, localTried)
+								c.logEvent("found", map[string]any{"candidate": cand, "tried": globalCount})
+								return
+							}
+						}
+					}
+					// progress batching
+					if localTried >= 1000 {
+						globalCount := atomic.AddUint64(&tried, localTried)
+						localTried = 0
+						every := c.opts.ProgressEvery
+						if every == 0 { every = 10000 }
+						if globalCount%every == 0 {
+							c.logEvent("progress", map[string]any{"tried": globalCount})
 						}
 					}
 				}
