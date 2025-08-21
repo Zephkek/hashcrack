@@ -18,9 +18,6 @@
 - UI/UX
 
 ## Next
-- Config for `Params` (env/file) with safe defaults
-- Smoother progress updates for slow hashes
-- Worker caps per algorithm
 - Add PBKDF2 and SHA3
 - Short docs and examples
 - CI: lint and tests
