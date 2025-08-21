@@ -1,51 +1,55 @@
 package hashes
 
 import (
-	"encoding/hex"
-	"unicode/utf16"
-	"strings"
-
-	"golang.org/x/crypto/md4"
+	"fmt"
+	"sort"
 )
 
-type ntlmHasher struct{}
+type Params struct {
+	Salt []byte
+	BcryptCost int
+	ScryptN int
+	ScryptR int
+	ScryptP int
+	ArgonTime uint32
+	ArgonMemoryKB uint32
+	ArgonParallelism uint8
+	PBKDF2Iterations int
+}
 
-func (n ntlmHasher) Name() string { return "ntlm" }
+type Hasher interface {
+	Name() string
+	Hash(plain string, p Params) (string, error)
+	Compare(target string, plain string, p Params) (bool, error)
+}
 
-func (n ntlmHasher) Hash(plain string, _ Params) (string, error) {
-	//convert to UTF-16LE
-	runes := []rune(plain)
-	utf16s := utf16.Encode(runes)
-	b := make([]byte, len(utf16s)*2)
-	for i, v := range utf16s {
-		b[i*2] = byte(v)
-		b[i*2+1] = byte(v >> 8)
+// ByteComparer is an optional fast-path to avoid string allocations in hot loops.
+// If implemented by a Hasher, callers may pass a UTF-8 plaintext as bytes.
+type ByteComparer interface {
+	CompareBytes(target string, plain []byte, p Params) (bool, error)
+}
+
+// BatchByteComparer allows comparing a batch of plaintexts at once against a single target.
+// Returns the index within batch of a matching plaintext or -1 if none matched.
+// Implementations should treat 'target' as the same format expected by Compare (e.g., hex for simple hashes).
+type BatchByteComparer interface {
+	CompareBatchHex(target string, batch [][]byte, p Params) (int, error)
+}
+
+var registry = map[string]Hasher{}
+
+func Register(h Hasher) { registry[h.Name()] = h }
+
+func Get(name string) (Hasher, error) {
+	if h, ok := registry[name]; ok {
+		return h, nil
 	}
-	h := md4.New()
-	_, _ = h.Write(b)
-	sum := h.Sum(nil)
-	return hex.EncodeToString(sum), nil
+	return nil, fmt.Errorf("unknown algorithm: %s", name)
 }
 
-func (n ntlmHasher) Compare(target string, plain string, p Params) (bool, error) {
-	h, _ := n.Hash(plain, p)
-	return strings.EqualFold(h, target), nil
+func List() []string {
+	out := make([]string, 0, len(registry))
+	for k := range registry { out = append(out, k) }
+	sort.Strings(out)
+	return out
 }
-
-func (n ntlmHasher) CompareBytes(target string, plain []byte, _ Params) (bool, error) {
-	rs := []rune(string(plain))
-	utf16s := utf16.Encode(rs)
-	b := make([]byte, len(utf16s)*2)
-	for i, v := range utf16s {
-		b[i*2] = byte(v)
-		b[i*2+1] = byte(v >> 8)
-	}
-	h := md4.New()
-	_, _ = h.Write(b)
-	sum := h.Sum(nil)
-	enc := make([]byte, hex.EncodedLen(len(sum)))
-	hex.Encode(enc, sum)
-	return strings.EqualFold(string(enc), target), nil
-}
-
-func init() { Register(ntlmHasher{}) }
