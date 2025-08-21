@@ -250,7 +250,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	
 	// change to whatever index location you like for this container this is the location
 	possiblePaths := []string{
-		"web/templates/index.html",
+		"web/template/index.html",
 	}
 	
 	var indexPath string
