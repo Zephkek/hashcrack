@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"encoding/hex"
+	"strings"
 
 	"edu/hashcrack/internal/cracker"
 	"edu/hashcrack/internal/hashes"
@@ -24,6 +26,7 @@ type Generator struct {
 	sets [][]rune 
 	workers int
 	batchSize int
+	radixes []uint64 // precomputed product of following set lengths for fast index decode
 }
 
 type workItem struct {
@@ -57,10 +60,18 @@ func NewGenerator(pattern string) (*Generator, error) {
 	workers := runtime.NumCPU() * 2 // idk, more ig?
 	batchSize := 10000 // larger = better performance, still technically slow compared to just using gpu but who cares now
 	
+	// Precompute radixes for fast index decomposition
+	radixes := make([]uint64, len(sets))
+	prod := uint64(1)
+	for i := len(sets) - 1; i >= 0; i-- {
+		radixes[i] = prod
+		prod *= uint64(len(sets[i]))
+	}
 	return &Generator{
-		sets: sets, 
+		sets: sets,
 		workers: workers,
 		batchSize: batchSize,
+		radixes: radixes,
 	}, nil
 }
 
@@ -91,9 +102,21 @@ func (g *Generator) Crack(ctx context.Context, c *cracker.Cracker, h hashes.Hash
 	resultChan := make(chan string, 1)
   // sync waitgroup!!!
 	var wg sync.WaitGroup
+	// Prepare fast-paths
+	var targetDigest []byte
+	var byteDigester hashes.ByteDigester
+	var runeDigester hashes.RuneDigester
+	if bd, ok := h.(hashes.ByteDigester); ok {
+		if td, err := hex.DecodeString(strings.TrimPrefix(strings.ToLower(target), "0x")); err == nil {
+			targetDigest = td
+			byteDigester = bd
+		}
+	}
+	if rd, ok := h.(hashes.RuneDigester); ok { runeDigester = rd }
+
 	for i := 0; i < g.workers; i++ {
 		wg.Add(1)
-		go g.worker(ctx, &wg, workChan, resultChan, h, p, target, &tried, total, eventFunc)
+		go g.worker(ctx, &wg, workChan, resultChan, h, p, target, targetDigest, byteDigester, runeDigester, &tried, total, eventFunc)
 	}
 
 	// wwww ywaza3!!
@@ -141,13 +164,23 @@ func (g *Generator) worker(
 	h hashes.Hasher,
 	p hashes.Params,
 	target string,
+	targetDigest []byte,
+	byteDigester hashes.ByteDigester,
+	runeDigester hashes.RuneDigester,
 	tried *uint64,
 	total uint64,
 	eventFunc func(string, map[string]any),
 ) {
 	defer wg.Done()
 	
-	buf := make([]rune, len(g.sets)) 
+	buf := make([]rune, len(g.sets))
+	bufBytes := make([]byte, len(g.sets))
+	// Check if mask characters are ASCII only; if so we can fill bytes directly
+	ascii := true
+	for _, set := range g.sets {
+		for _, r := range set { if r > 0x7F { ascii = false; break } }
+		if !ascii { break }
+	}
 	localTried := uint64(0)
 	progressInterval := uint64(5000) // Report progress every 5000 attempts
 	
@@ -160,7 +193,7 @@ func (g *Generator) worker(
 				return
 			}
 			
-			found := g.processWorkItem(item, buf, h, p, target, &localTried, progressInterval, tried, total, eventFunc)
+			found := g.processWorkItem(item, buf, bufBytes, ascii, h, p, target, targetDigest, byteDigester, runeDigester, &localTried, progressInterval, tried, total, eventFunc)
 			if found != "" {
 				select {
 				case resultChan <- found:
@@ -175,68 +208,81 @@ func (g *Generator) worker(
 func (g *Generator) processWorkItem(
 	item workItem,
 	buf []rune,
+	bufBytes []byte,
+	ascii bool,
 	h hashes.Hasher,
 	p hashes.Params,
 	target string,
+	targetDigest []byte,
+	byteDigester hashes.ByteDigester,
+	runeDigester hashes.RuneDigester,
 	localTried *uint64,
 	progressInterval uint64,
 	globalTried *uint64,
 	total uint64,
 	eventFunc func(string, map[string]any),
 ) string {
-	bc, _ := h.(hashes.ByteComparer)
-	bbc, _ := h.(hashes.BatchByteComparer)
-	const lane = 16
-	batch := make([][]byte, 0, lane)
-	// Reusable byte buffer
-	cand := make([]byte, len(buf))
+	// Initialize digits from startIndex once, then increment in-place per attempt
+	digits := g.indexToDigitsMask(item.startIndex)
+	g.digitsToBufMask(digits, buf)
+	attempts := item.endIndex - item.startIndex
 
-	for i := item.startIndex; i < item.endIndex; i++ {
-		g.indexToCombination(i, buf)
-		if bbc != nil || bc != nil {
-			// ASCII assumption is fine here as masks are typical ASCII; use direct cast
-			for j := range buf { cand[j] = byte(buf[j]) }
-			if bbc != nil {
-				b := make([]byte, len(cand))
-				copy(b, cand)
-				batch = append(batch, b)
-				(*localTried)++
-				if len(batch) == lane || i+1 == item.endIndex {
-					if idx, _ := bbc.CompareBatchHex(target, batch, p); idx >= 0 {
-						return string(batch[idx])
-					}
-					batch = batch[:0]
-				}
+	for n := uint64(0); n < attempts; n++ {
+		var ok bool
+		var candidate string
+
+		if byteDigester != nil && len(targetDigest) > 0 && ascii {
+			for j := 0; j < len(buf); j++ { bufBytes[j] = byte(buf[j]) }
+			sum, _ := byteDigester.DigestBytes(bufBytes, p)
+			ok = len(sum) == len(targetDigest) && constEq(sum, targetDigest)
+			if ok { candidate = string(bufBytes) }
+		} else if runeDigester != nil {
+			sum, _ := runeDigester.DigestRunes(buf, len(buf), p)
+			if len(targetDigest) > 0 {
+				ok = len(sum) == len(targetDigest) && constEq(sum, targetDigest)
+				if ok { candidate = string(buf) }
 			} else {
-				ok, _ := bc.CompareBytes(target, cand, p)
-				(*localTried)++
-				if ok { return string(cand) }
+				candidate = string(buf)
+				ok, _ = h.Compare(target, candidate, p)
 			}
 		} else {
-			candidate := string(buf)
-			ok, _ := h.Compare(target, candidate, p)
-			(*localTried)++
-			if ok { return candidate }
+			candidate = string(buf)
+			ok, _ = h.Compare(target, candidate, p)
 		}
-        
+		(*localTried)++
+
+		if ok { return candidate }
+
+		if n+1 < attempts {
+			changed := g.incrementDigitsMask(digits)
+			// update only changed position
+			if changed >= 0 {
+				buf[changed] = g.sets[changed][digits[changed]]
+				if ascii { bufBytes[changed] = byte(buf[changed]) }
+			}
+		}
+
 		if *localTried%progressInterval == 0 {
 			globalCount := atomic.AddUint64(globalTried, progressInterval)
 			if eventFunc != nil {
 				progress := float64(globalCount) / float64(total) * 100
+				if candidate == "" {
+					if ascii { candidate = string(bufBytes) } else { candidate = string(buf) }
+				}
 				eventFunc("progress", map[string]any{
 					"tried": globalCount,
 					"total": total,
 					"progress_percent": progress,
-					"candidate": string(buf),
+					"candidate": candidate,
 				})
 			}
 		}
 	}
-	
+
 	if remaining := *localTried % progressInterval; remaining > 0 {
 		atomic.AddUint64(globalTried, remaining)
 	}
-	
+
 	return ""
 }
 
@@ -264,9 +310,44 @@ func (g *Generator) distributeWork(ctx context.Context, workChan chan<- workItem
 }
 
 func (g *Generator) indexToCombination(index uint64, buf []rune) {
-	for i := len(g.sets) - 1; i >= 0; i-- {
+	// Use precomputed radixes: digit i is floor(index / radixes[i]) % len(set[i])
+	for i := 0; i < len(g.sets); i++ {
 		setLen := uint64(len(g.sets[i]))
-		buf[i] = g.sets[i][index%setLen]
-		index /= setLen
+		d := (index / g.radixes[i]) % setLen
+		buf[i] = g.sets[i][d]
 	}
+}
+
+// constEq does constant-time comparison of two equal-length byte slices.
+func constEq(a, b []byte) bool {
+	if len(a) != len(b) { return false }
+	var v byte
+	for i := 0; i < len(a); i++ { v |= a[i] ^ b[i] }
+	return v == 0
+}
+
+// indexToDigitsMask computes the per-position digits for the starting index.
+func (g *Generator) indexToDigitsMask(index uint64) []int {
+	digits := make([]int, len(g.sets))
+	for i := 0; i < len(g.sets); i++ {
+		setLen := uint64(len(g.sets[i]))
+		d := (index / g.radixes[i]) % setLen
+		digits[i] = int(d)
+	}
+	return digits
+}
+
+func (g *Generator) digitsToBufMask(digits []int, buf []rune) {
+	for i := 0; i < len(digits); i++ { buf[i] = g.sets[i][digits[i]] }
+}
+
+// incrementDigitsMask increments the mixed-radix number represented by digits.
+// Returns the index that changed, or -1.
+func (g *Generator) incrementDigitsMask(digits []int) int {
+	for i := len(digits) - 1; i >= 0; i-- {
+		d := digits[i] + 1
+		if d < len(g.sets[i]) { digits[i] = d; return i }
+		digits[i] = 0
+	}
+	return -1
 }

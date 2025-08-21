@@ -6,27 +6,166 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"strings"
-	"golang.org/x/crypto/sha3"
-
-	md5simd "github.com/minio/md5-simd"
-	sha256simd "github.com/minio/sha256-simd"
 	"sync"
+	sha256simd "github.com/minio/sha256-simd"
+	md5simd "github.com/minio/md5-simd"
+	"golang.org/x/crypto/sha3"
 )
 
 type simpleHasher struct { algo string }
 
 func (s simpleHasher) Name() string { return s.algo }
 
+var (
+	md5Once sync.Once
+	md5Srv md5simd.Server
+)
+
+func getMD5Server() md5simd.Server {
+	md5Once.Do(func(){ md5Srv = md5simd.NewServer() })
+	return md5Srv
+}
+
+// DigestMany implements BatchByteDigester for md5 and sha256.
+func (s simpleHasher) DigestMany(plains [][]byte, p Params) ([][]byte, error) {
+	switch s.algo {
+	case "md5":
+		srv := getMD5Server()
+	// Create N hashers and feed; md5-simd server parallelizes lanes internally.
+		out := make([][]byte, len(plains))
+		hs := make([]md5simd.Hasher, len(plains))
+		for i := range hs { hs[i] = srv.NewHash() }
+		for i, h := range hs {
+			_, _ = h.Write(plains[i])
+			if len(p.Salt) > 0 { _, _ = h.Write(p.Salt) }
+		}
+		for i, h := range hs { out[i] = h.Sum(nil); h.Close() }
+		return out, nil
+	case "sha256":
+		// Use sha256-simd Sum256 per input; there is no explicit server API exposed, but Sum256 is fast.
+		out := make([][]byte, len(plains))
+		for i, b := range plains {
+			bb := append(append([]byte(nil), b...), p.Salt...)
+			v := sha256simd.Sum256(bb)
+			out[i] = v[:]
+		}
+		return out, nil
+	default:
+		// Fallback: single hashing
+		out := make([][]byte, len(plains))
+		for i, b := range plains {
+			d, _ := s.DigestBytes(b, p)
+			out[i] = d
+		}
+		return out, nil
+	}
+}
+
+// DigestBytes implements ByteDigester for simple hash algorithms that produce
+// fixed-size digests and are typically hex-encoded in textual form. This avoids
+// the hex encoding and string allocations on hot paths.
+func (s simpleHasher) DigestBytes(plain []byte, p Params) ([]byte, error) {
+	switch s.algo {
+	case "md5":
+		if cap(plain) >= len(plain)+len(p.Salt) {
+			plain = plain[:len(plain)+len(p.Salt)]
+			copy(plain[len(plain)-len(p.Salt):], p.Salt)
+		} else {
+			plain = append(append([]byte(nil), plain...), p.Salt...)
+		}
+		// For tiny messages, stdlib md5 is faster than md5-simd setup overhead.
+		if len(plain) < 64 {
+			v := md5.Sum(plain)
+			return v[:], nil
+		}
+		h := getMD5Server().NewHash(); defer h.Close()
+		_, _ = h.Write(plain)
+		return h.Sum(nil), nil
+	case "sha1":
+		if cap(plain) >= len(plain)+len(p.Salt) {
+			plain = plain[:len(plain)+len(p.Salt)]
+			copy(plain[len(plain)-len(p.Salt):], p.Salt)
+		} else {
+			plain = append(append([]byte(nil), plain...), p.Salt...)
+		}
+		v := sha1.Sum(plain)
+		return v[:], nil
+	case "sha256":
+		if cap(plain) >= len(plain)+len(p.Salt) {
+			plain = plain[:len(plain)+len(p.Salt)]
+			copy(plain[len(plain)-len(p.Salt):], p.Salt)
+		} else {
+			plain = append(append([]byte(nil), plain...), p.Salt...)
+		}
+		v := sha256simd.Sum256(plain)
+		return v[:], nil
+	case "sha384":
+		if cap(plain) >= len(plain)+len(p.Salt) {
+			plain = plain[:len(plain)+len(p.Salt)]
+			copy(plain[len(plain)-len(p.Salt):], p.Salt)
+		} else {
+			plain = append(append([]byte(nil), plain...), p.Salt...)
+		}
+		v := sha512.Sum384(plain)
+		return v[:], nil
+	case "sha512":
+		if cap(plain) >= len(plain)+len(p.Salt) {
+			plain = plain[:len(plain)+len(p.Salt)]
+			copy(plain[len(plain)-len(p.Salt):], p.Salt)
+		} else {
+			plain = append(append([]byte(nil), plain...), p.Salt...)
+		}
+		v := sha512.Sum512(plain)
+		return v[:], nil
+	case "sha3-224":
+		h := sha3.New224()
+		_, _ = h.Write(plain)
+		if len(p.Salt) > 0 { _, _ = h.Write(p.Salt) }
+		return h.Sum(nil), nil
+	case "sha3-256":
+		h := sha3.New256()
+		_, _ = h.Write(plain)
+		if len(p.Salt) > 0 { _, _ = h.Write(p.Salt) }
+		return h.Sum(nil), nil
+	case "sha3-384":
+		h := sha3.New384()
+		_, _ = h.Write(plain)
+		if len(p.Salt) > 0 { _, _ = h.Write(p.Salt) }
+		return h.Sum(nil), nil
+	case "sha3-512":
+		h := sha3.New512()
+		_, _ = h.Write(plain)
+		if len(p.Salt) > 0 { _, _ = h.Write(p.Salt) }
+		return h.Sum(nil), nil
+	case "shake128":
+		h := sha3.NewShake128()
+		_, _ = h.Write(plain)
+		if len(p.Salt) > 0 { _, _ = h.Write(p.Salt) }
+		out := make([]byte, 32) // 256-bit output for SHAKE128
+		_, _ = h.Read(out)
+		return out, nil
+	case "shake256":
+		h := sha3.NewShake256()
+		_, _ = h.Write(plain)
+		if len(p.Salt) > 0 { _, _ = h.Write(p.Salt) }
+		out := make([]byte, 64) // 512-bit output for SHAKE256
+		_, _ = h.Read(out)
+		return out, nil
+	default:
+		return nil, nil
+	}
+}
+
 func (s simpleHasher) hashBytes(b []byte) []byte {
 	switch s.algo {
 	case "md5":
-	// MD5
-	v := md5.Sum(b); return v[:]
+		v := md5.Sum(b); return v[:]
 	case "sha1":
-		v := sha1.Sum(b); return v[:]
+		v := sha1.Sum(b)
+		return v[:]
 	case "sha256":
-	// sha256-simd
-		v := sha256simd.Sum256(b); return v[:]
+		v := sha256simd.Sum256(b)
+		return v[:]
 	case "sha384":
 		v := sha512.Sum384(b); return v[:]
 	case "sha512":
@@ -62,166 +201,22 @@ func (s simpleHasher) Hash(plain string, p Params) (string, error) {
 }
 
 func (s simpleHasher) Compare(target string, plain string, p Params) (bool, error) {
-	// Decode target once to avoid extra hex work
-	if th, ok := decodeTargetHex(target, s.algo); ok {
-		buf := append([]byte(plain), p.Salt...)
-		sum := s.hashBytes(buf)
-		if len(sum) != len(th) { return false, nil }
-		for i := range sum { if sum[i] != th[i] { return false, nil } }
-		return true, nil
+	// Fast path: if target is hex and algorithm supports digest bytes, avoid
+	// building hex strings and compare bytes directly.
+	if bd, ok := interface{}(s).(ByteDigester); ok {
+		// Accept optional 0x prefix; case-insensitive
+		t := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(target)), "0x")
+		if tb, err := hex.DecodeString(t); err == nil {
+			// Pass only plaintext; DigestBytes adds salt internally
+			sum, _ := bd.DigestBytes([]byte(plain), p)
+			if len(sum) != len(tb) { return false, nil }
+			var v byte
+			for i := 0; i < len(sum); i++ { v |= sum[i] ^ tb[i] }
+			return v == 0, nil
+		}
 	}
 	h, _ := s.Hash(plain, p)
 	return strings.EqualFold(h, target), nil
-}
-
-// Byte-wise compare to avoid string allocations.
-func (s simpleHasher) CompareBytes(target string, plain []byte, p Params) (bool, error) {
-	if th, ok := decodeTargetHex(target, s.algo); ok {
-		if len(p.Salt) > 0 {
-			buf := make([]byte, 0, len(plain)+len(p.Salt))
-			buf = append(buf, plain...)
-			buf = append(buf, p.Salt...)
-			sum := s.hashBytes(buf)
-			if len(sum) != len(th) { return false, nil }
-			for i := range sum { if sum[i] != th[i] { return false, nil } }
-			return true, nil
-		}
-		sum := s.hashBytes(plain)
-		if len(sum) != len(th) { return false, nil }
-		for i := range sum { if sum[i] != th[i] { return false, nil } }
-		return true, nil
-	}
-	// Hex fallback
-	if len(p.Salt) > 0 {
-		buf := make([]byte, 0, len(plain)+len(p.Salt))
-		buf = append(buf, plain...)
-		buf = append(buf, p.Salt...)
-		sum := s.hashBytes(buf)
-		enc := make([]byte, hex.EncodedLen(len(sum)))
-		hex.Encode(enc, sum)
-		return strings.EqualFold(string(enc), target), nil
-	}
-	sum := s.hashBytes(plain)
-	enc := make([]byte, hex.EncodedLen(len(sum)))
-	hex.Encode(enc, sum)
-	return strings.EqualFold(string(enc), target), nil
-}
-
-// Batch compare against a hex target; returns index or -1.
-func (s simpleHasher) CompareBatchHex(target string, batch [][]byte, p Params) (int, error) {
-	if th, ok := decodeTargetHex(target, s.algo); ok {
-		// Fast path on decoded bytes; MD5 uses md5-simd server
-		if s.algo == "md5" {
-			srv := getMD5Server()
-			type md5Hasher interface{ Write([]byte) (int, error); Sum([]byte) []byte; Close() error }
-			hs := make([]md5Hasher, len(batch))
-			for i, b := range batch {
-				h := srv.NewHash()
-				if len(p.Salt) > 0 {
-					buf := make([]byte, 0, len(b)+len(p.Salt))
-					buf = append(buf, b...)
-					buf = append(buf, p.Salt...)
-					_, _ = h.Write(buf)
-				} else {
-					_, _ = h.Write(b)
-				}
-				hs[i] = h
-			}
-			for i, h := range hs {
-				sum := h.Sum(nil)
-				if len(sum) == len(th) {
-					match := true
-					for k := range sum { if sum[k] != th[k] { match = false; break } }
-					if match { return i, nil }
-				}
-				h.Close()
-			}
-			return -1, nil
-		}
-		for i := range batch {
-			var sum []byte
-			if len(p.Salt) > 0 {
-				buf := make([]byte, 0, len(batch[i])+len(p.Salt))
-				buf = append(buf, batch[i]...)
-				buf = append(buf, p.Salt...)
-				sum = s.hashBytes(buf)
-			} else {
-				sum = s.hashBytes(batch[i])
-			}
-			if len(sum) != len(th) { continue }
-			eq := true
-			for k := range sum { if sum[k] != th[k] { eq = false; break } }
-			if eq { return i, nil }
-		}
-		return -1, nil
-	}
-	// Fallback: hex-encode path
-	targetLower := strings.ToLower(target)
-	for i := range batch {
-		var sum []byte
-		if len(p.Salt) > 0 {
-			buf := make([]byte, 0, len(batch[i])+len(p.Salt))
-			buf = append(buf, batch[i]...)
-			buf = append(buf, p.Salt...)
-			sum = s.hashBytes(buf)
-		} else {
-			sum = s.hashBytes(batch[i])
-		}
-		enc := make([]byte, hex.EncodedLen(len(sum)))
-		hex.Encode(enc, sum)
-		if strings.EqualFold(string(enc), targetLower) { return i, nil }
-	}
-	return -1, nil
-}
-
-// Decode hex target based on expected algo length.
-func decodeTargetHex(target, algo string) ([]byte, bool) {
-	want := hashLen(algo)
-	if want == 0 || len(target) != want*2 { return nil, false }
-	out := make([]byte, want)
-	if _, err := hex.Decode(out, []byte(strings.ToLower(target))); err != nil { return nil, false }
-	return out, true
-}
-
-func hashLen(algo string) int {
-	switch algo {
-	case "md5":
-		return 16
-	case "sha1":
-		return 20
-	case "sha256":
-		return 32
-	case "sha384":
-		return 48
-	case "sha512":
-		return 64
-	case "sha3-224":
-		return 28
-	case "sha3-256":
-		return 32
-	case "sha3-384":
-		return 48
-	case "sha3-512":
-		return 64
-	case "shake128":
-		return 32
-	case "shake256":
-		return 64
-	default:
-		return 0
-	}
-}
-
-var (
-	md5Once   sync.Once
-	md5Server md5simd.Server
-)
-
-func getMD5Server() md5simd.Server {
-	md5Once.Do(func() {
-		md5Server = md5simd.NewServer()
-	})
-	return md5Server
 }
 
 func init() {

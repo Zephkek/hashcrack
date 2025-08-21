@@ -2,8 +2,7 @@ package hashes
 
 import (
 	"crypto/rand"
-	"crypto/sha1"
-	"crypto/sha256"
+	stdsha1 "crypto/sha1"
 	"crypto/sha512"
 	"encoding/hex"
 	"errors"
@@ -13,6 +12,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/crypto/pbkdf2"
 	"golang.org/x/crypto/scrypt"
+	sha256simd "github.com/minio/sha256-simd"
 )
 
 type kdfHasher struct { algo string }
@@ -50,14 +50,14 @@ func (k kdfHasher) Hash(plain string, p Params) (string, error) {
 		if len(salt) == 0 { salt = make([]byte, 16); _, _ = rand.Read(salt) }
 		iter := 10000
 		if p.PBKDF2Iterations > 0 { iter = p.PBKDF2Iterations }
-		b := pbkdf2.Key([]byte(plain), salt, iter, 20, sha1.New)
+		b := pbkdf2.Key([]byte(plain), salt, iter, 20, stdsha1.New)
 		return "pbkdf2-sha1:" + hex.EncodeToString(salt) + ":" + fmt.Sprintf("%d", iter) + ":" + hex.EncodeToString(b), nil
 	case "pbkdf2-sha256":
 		salt := p.Salt
 		if len(salt) == 0 { salt = make([]byte, 16); _, _ = rand.Read(salt) }
 		iter := 10000
 		if p.PBKDF2Iterations > 0 { iter = p.PBKDF2Iterations }
-		b := pbkdf2.Key([]byte(plain), salt, iter, 32, sha256.New)
+		b := pbkdf2.Key([]byte(plain), salt, iter, 32, sha256simd.New)
 		return "pbkdf2-sha256:" + hex.EncodeToString(salt) + ":" + fmt.Sprintf("%d", iter) + ":" + hex.EncodeToString(b), nil
 	case "pbkdf2-sha512":
 		salt := p.Salt
@@ -98,8 +98,11 @@ func (k kdfHasher) Compare(target string, plain string, p Params) (bool, error) 
 		key, _ := hex.DecodeString(keyHex)
 		iter := 10000
 		fmt.Sscanf(iterStr, "%d", &iter)
-		b := pbkdf2.Key([]byte(plain), salt, iter, len(key), sha1.New)
-		return hex.EncodeToString(b) == hex.EncodeToString(key), nil
+		b := pbkdf2.Key([]byte(plain), salt, iter, len(key), stdsha1.New)
+		if len(b) != len(key) { return false, nil }
+		var v byte
+		for i := 0; i < len(b); i++ { v |= b[i] ^ key[i] }
+		return v == 0, nil
 	case "pbkdf2-sha256":
 		saltHex, iterStr, keyHex, err := split4(target, "pbkdf2-sha256")
 		if err != nil { return false, err }
@@ -107,8 +110,11 @@ func (k kdfHasher) Compare(target string, plain string, p Params) (bool, error) 
 		key, _ := hex.DecodeString(keyHex)
 		iter := 10000
 		fmt.Sscanf(iterStr, "%d", &iter)
-		b := pbkdf2.Key([]byte(plain), salt, iter, len(key), sha256.New)
-		return hex.EncodeToString(b) == hex.EncodeToString(key), nil
+		b := pbkdf2.Key([]byte(plain), salt, iter, len(key), sha256simd.New)
+		if len(b) != len(key) { return false, nil }
+		var v2 byte
+		for i := 0; i < len(b); i++ { v2 |= b[i] ^ key[i] }
+		return v2 == 0, nil
 	case "pbkdf2-sha512":
 		saltHex, iterStr, keyHex, err := split4(target, "pbkdf2-sha512")
 		if err != nil { return false, err }

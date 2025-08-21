@@ -32,12 +32,10 @@ func (n ntlmHasher) Compare(target string, plain string, p Params) (bool, error)
 	return strings.EqualFold(h, target), nil
 }
 
-// CompareBytes implements ByteComparer for NTLM (input is UTF-8).
-func (n ntlmHasher) CompareBytes(target string, plain []byte, _ Params) (bool, error) {
-	// Convert to UTF-16LE without intermediate string allocation.
-	// Go doesn't provide direct utf8->utf16 without runes, so convert to []rune once.
-	rs := []rune(string(plain))
-	utf16s := utf16.Encode(rs)
+// DigestRunes implements RuneDigester for NTLM to avoid extra allocations in hot loops.
+func (n ntlmHasher) DigestRunes(plain []rune, length int, _ Params) ([]byte, error) {
+	if length > len(plain) { length = len(plain) }
+	utf16s := utf16.Encode(plain[:length])
 	b := make([]byte, len(utf16s)*2)
 	for i, v := range utf16s {
 		b[i*2] = byte(v)
@@ -45,10 +43,7 @@ func (n ntlmHasher) CompareBytes(target string, plain []byte, _ Params) (bool, e
 	}
 	h := md4.New()
 	_, _ = h.Write(b)
-	sum := h.Sum(nil)
-	enc := make([]byte, hex.EncodedLen(len(sum)))
-	hex.Encode(enc, sum)
-	return strings.EqualFold(string(enc), target), nil
+	return h.Sum(nil), nil
 }
 
 func init() { Register(ntlmHasher{}) }

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"encoding/hex"
 
 	"edu/hashcrack/internal/hashes"
 )
@@ -90,6 +91,14 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 	c.logEvent("start", map[string]any{"workers": workers, "algo": h.Name(), "wordlist": wordlistPath})
 
 	target = strings.TrimSpace(target)
+	var targetDigest []byte
+	var byteDigester hashes.ByteDigester
+	if bd, ok := h.(hashes.ByteDigester); ok {
+		if td, err := hex.DecodeString(strings.TrimPrefix(strings.ToLower(target), "0x")); err == nil {
+			targetDigest = td
+			byteDigester = bd
+		}
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -99,9 +108,6 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 	var plaintext atomic.Value
 
 	workChan := make(chan string, workers*8)
-	// Optional fast paths
-	bc, _ := h.(hashes.ByteComparer)
-	bbc, _ := h.(hashes.BatchByteComparer)
 	
 	// added: sync.WaitGroup  per worker
 	var wg sync.WaitGroup
@@ -110,8 +116,6 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 		go func() {
 			defer wg.Done()
 			localTried := uint64(0)
-			// micro-batch for SIMD lanes
-			const lane = 16
 			
 			for {
 				select {
@@ -134,62 +138,73 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 							candidates = xs 
 						}
 					}
-					// fast path with batch compare if available
-					if bbc != nil {
-						bufBatch := make([][]byte, 0, lane)
-						for i := 0; i < len(candidates); i++ {
+					
+					// If hasher supports batching and we have many candidates (from transforms), try batch.
+					if bbd, ok := h.(hashes.BatchByteDigester); ok && len(candidates) >= 4 && byteDigester != nil && len(targetDigest) > 0 {
+						// Batch size tuned for md5-simd lanes; allow smaller batches too.
+						batch := make([][]byte, 0, len(candidates))
+						for _, cnd := range candidates { batch = append(batch, []byte(cnd)) }
+						sums, _ := bbd.DigestMany(batch, p)
+						for i, sum := range sums {
 							if found.Load() { break }
-							bufBatch = append(bufBatch, []byte(candidates[i]))
-							localTried++
-							if len(bufBatch) == lane || i+1 == len(candidates) {
-								if idx, _ := bbc.CompareBatchHex(target, bufBatch, p); idx >= 0 {
-									cand := string(bufBatch[idx])
-									plaintext.Store(cand)
-									found.Store(true)
-									cancel()
-									globalCount := atomic.AddUint64(&tried, localTried)
-									c.logEvent("found", map[string]any{"candidate": cand, "tried": globalCount})
-									return
-								}
-								bufBatch = bufBatch[:0]
-							}
-						}
-					} else if bc != nil {
-						for _, cand := range candidates {
-							if found.Load() { break }
-							if ok, _ := bc.CompareBytes(target, []byte(cand), p); ok {
-								plaintext.Store(cand)
-								found.Store(true)
-								cancel()
-								globalCount := atomic.AddUint64(&tried, localTried+1)
-								c.logEvent("found", map[string]any{"candidate": cand, "tried": globalCount})
-								return
-							}
-							localTried++
-						}
-					} else {
-						for _, cand := range candidates {
-							if found.Load() { break }
-							ok, _ := h.Compare(target, cand, p)
+							ok := len(sum) == len(targetDigest) && constEq(sum, targetDigest)
 							localTried++
 							if ok {
-								plaintext.Store(cand)
+								plaintext.Store(candidates[i])
 								found.Store(true)
 								cancel()
 								globalCount := atomic.AddUint64(&tried, localTried)
-								c.logEvent("found", map[string]any{"candidate": cand, "tried": globalCount})
+								c.logEvent("found", map[string]any{"candidate": candidates[i], "tried": globalCount})
 								return
 							}
 						}
+						if localTried%1000 == 0 {
+							globalCount := atomic.AddUint64(&tried, 1000)
+							localTried = 0
+							every := c.opts.ProgressEvery; if every == 0 { every = 5000 }
+							if globalCount%every == 0 { c.logEvent("progress", map[string]any{"tried": globalCount}) }
+						}
+						continue
 					}
-					// progress batching
-					if localTried >= 1000 {
-						globalCount := atomic.AddUint64(&tried, localTried)
-						localTried = 0
-						every := c.opts.ProgressEvery
-						if every == 0 { every = 10000 }
-						if globalCount%every == 0 {
-							c.logEvent("progress", map[string]any{"tried": globalCount})
+					for _, cand := range candidates {
+						if found.Load() { 
+							break 
+						}
+						var ok bool
+						if byteDigester != nil && len(targetDigest) > 0 {
+							sum, _ := byteDigester.DigestBytes([]byte(cand), p)
+							ok = len(sum) == len(targetDigest) && constEq(sum, targetDigest)
+						} else {
+							ok, _ = h.Compare(target, cand, p)
+						}
+						localTried++
+						
+						if ok {
+							plaintext.Store(cand)
+							found.Store(true)
+							cancel()
+							
+							globalCount := atomic.AddUint64(&tried, localTried)
+							c.logEvent("found", map[string]any{
+								"candidate": cand, 
+								"tried": globalCount,
+							})
+							return
+						}
+						// batch them all and process
+						if localTried%1000 == 0 {
+							globalCount := atomic.AddUint64(&tried, 1000)
+							localTried = 0 
+							
+							// More frequent and consistent progress reporting
+							every := c.opts.ProgressEvery
+							if every == 0 { every = 5000 } // Smaller default for more stable updates
+							if globalCount%every == 0 { 
+								c.logEvent("progress", map[string]any{
+									"tried": globalCount,
+									"candidate": cand,
+								}) 
+							}
 						}
 					}
 				}
@@ -241,4 +256,12 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 		"duration_ms": res.Duration.Milliseconds(),
 	})
 	return res, nil
+}
+
+// constEq does constant-time comparison of two equal-length byte slices.
+func constEq(a, b []byte) bool {
+	if len(a) != len(b) { return false }
+	var v byte
+	for i := 0; i < len(a); i++ { v |= a[i] ^ b[i] }
+	return v == 0
 }

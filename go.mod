@@ -7,7 +7,6 @@ require (
 	github.com/spf13/viper v1.19.0
 	golang.org/x/crypto v0.27.0
 	golang.org/x/text v0.18.0
-	github.com/minio/sha256-simd v1.0.1
 	github.com/minio/md5-simd v1.1.2
 )
 
