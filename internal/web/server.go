@@ -328,6 +328,16 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		
+		// Validate algorithm and target format early to prevent starting bad tasks
+		if ok, msg := hashes.Validate(algo, req.Target); !ok {
+			reason := msg
+			if strings.TrimSpace(reason) == "" {
+				reason = "algorithm does not match target hash format"
+			}
+			http.Error(w, fmt.Sprintf("invalid hash for %s: %s", algo, reason), 400)
+			return
+		}
+
 		h, err := hashes.Get(algo)
 		if err != nil {
 			http.Error(w, err.Error(), 400)
