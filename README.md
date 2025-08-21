@@ -73,8 +73,6 @@ HashCrack is a Go‑based, CPU hash‑cracking toolkit with a Web UI and a simpl
 > This repo includes `docker-compose.yml`. Compose builds the image, maps port 8080, and mounts the repo at `/data` inside the container.
 
 ```powershell
-# From repository root (PowerShell)
-# Build image and start the web UI in the background
 docker compose up --build -d
 
 # Tail logs (optional)
