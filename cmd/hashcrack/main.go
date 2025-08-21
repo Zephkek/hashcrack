@@ -144,6 +144,14 @@ func runCrack(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Detected algorithm: %s\n", algo)
 	}
 
+	// Validate algorithm vs target format before proceeding
+	if ok, msg := hashes.Validate(algo, targetHash); !ok {
+		if strings.TrimSpace(msg) == "" {
+			msg = "selected algorithm does not match target hash format"
+		}
+		return fmt.Errorf("invalid input: %s (algo=%s)", msg, algo)
+	}
+
 	hasher, err := hashes.Get(algo)
 	if err != nil {
 		return err
