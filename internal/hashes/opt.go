@@ -1,8 +1,7 @@
 package hashes
+// still WIP functions from the crypto go library to optimize the hot path
 
-// Optional fast-path interfaces for high-throughput cracking.
-// Implementations may provide these to avoid per-attempt string allocations
-// and hex encoding when comparing candidates.
+
 
 // ByteDigester computes the raw digest bytes for a plaintext represented
 // as UTF-8 bytes (plain) under the provided parameters.
@@ -24,3 +23,4 @@ type RuneDigester interface {
 type BatchByteDigester interface {
     DigestMany(plains [][]byte, p Params) ([][]byte, error)
 }
+
