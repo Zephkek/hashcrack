@@ -155,8 +155,9 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 							globalCount := atomic.AddUint64(&tried, 1000)
 							localTried = 0 
 							
+							// More frequent and consistent progress reporting
 							every := c.opts.ProgressEvery
-							if every == 0 { every = 50000 }
+							if every == 0 { every = 5000 } // Smaller default for more stable updates
 							if globalCount%every == 0 { 
 								c.logEvent("progress", map[string]any{
 									"tried": globalCount,
