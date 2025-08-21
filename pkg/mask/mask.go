@@ -184,18 +184,41 @@ func (g *Generator) processWorkItem(
 	total uint64,
 	eventFunc func(string, map[string]any),
 ) string {
-	
+	bc, _ := h.(hashes.ByteComparer)
+	bbc, _ := h.(hashes.BatchByteComparer)
+	const lane = 16
+	batch := make([][]byte, 0, lane)
+	// Reusable byte buffer
+	cand := make([]byte, len(buf))
+
 	for i := item.startIndex; i < item.endIndex; i++ {
 		g.indexToCombination(i, buf)
-		candidate := string(buf)
-		
-	ok, _ := h.Compare(target, candidate, p)
-	(*localTried)++
-		
-		if ok {
-			return candidate
+		if bbc != nil || bc != nil {
+			// ASCII assumption is fine here as masks are typical ASCII; use direct cast
+			for j := range buf { cand[j] = byte(buf[j]) }
+			if bbc != nil {
+				b := make([]byte, len(cand))
+				copy(b, cand)
+				batch = append(batch, b)
+				(*localTried)++
+				if len(batch) == lane || i+1 == item.endIndex {
+					if idx, _ := bbc.CompareBatchHex(target, batch, p); idx >= 0 {
+						return string(batch[idx])
+					}
+					batch = batch[:0]
+				}
+			} else {
+				ok, _ := bc.CompareBytes(target, cand, p)
+				(*localTried)++
+				if ok { return string(cand) }
+			}
+		} else {
+			candidate := string(buf)
+			ok, _ := h.Compare(target, candidate, p)
+			(*localTried)++
+			if ok { return candidate }
 		}
-		
+        
 		if *localTried%progressInterval == 0 {
 			globalCount := atomic.AddUint64(globalTried, progressInterval)
 			if eventFunc != nil {
@@ -204,7 +227,7 @@ func (g *Generator) processWorkItem(
 					"tried": globalCount,
 					"total": total,
 					"progress_percent": progress,
-					"candidate": candidate,
+					"candidate": string(buf),
 				})
 			}
 		}
