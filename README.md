@@ -13,9 +13,9 @@
   - Actual Web server backend
   - CLI interface
   - UI
+  - Add PBKDF2 and SHA3
 
 ## Next
-- Add PBKDF2 and SHA3
 - Short docs and examples
 - CI: lint and tests
 - Proper documentation / readme
