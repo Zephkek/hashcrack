@@ -215,5 +215,5 @@ Environment overrides (via Viper): `HASHCRACK_WORKERS`, `HASHCRACK_LOG`, etc.
 ---
 > Use ethically and legally. Only attack hashes you own or are authorized to test.
 
-Developped with love by Zeph ❤️
+Developped with love by Zeph as part of my internship at GI.
 
