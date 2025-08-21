@@ -12,12 +12,10 @@
   - Attack methods backend
   - Actual Web server backend
   - CLI interface
-
-
-## In progress
-- UI/UX
+  - UI
 
 ## Next
 - Add PBKDF2 and SHA3
 - Short docs and examples
 - CI: lint and tests
+- Proper documentation / readme
