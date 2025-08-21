@@ -25,7 +25,7 @@ func Validate(algo, target string) (bool, string) {
 	case "md5":
 		if len(t) == 32 && reHex.MatchString(t) {
 			if t == strings.ToUpper(t) {
-				return true, "Note: 32-hex may also be NTLM/LM; ensure MD5"
+				return true, "Note: 32-hex may also be NTLM/LM; confirm MD5 vs NTLM/LM"
 			}
 			return true, ""
 		}
