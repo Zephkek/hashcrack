@@ -195,24 +195,21 @@
                 </div>
               </div>
 
-              <!-- FIX: Improved upload section structure -->
+              <!-- clean upload section -->
               <div class="upload-section" id="uploadSection" style="display: none;">
                 <div class="upload-area">
                   <input type="file" id="uploadFile" accept=".txt,.lst" style="display: none;" />
                   <div class="upload-placeholder" id="uploadPlaceholder" onclick="document.getElementById('uploadFile').click()">
                     <i class="fas fa-cloud-upload-alt"></i>
-                    <span id="uploadText">Click to select wordlist file</span>
-                    <small>Supports .txt and .lst files (max 10MB)</small>
+                    <span id="uploadText">click to select wordlist file</span>
+                    <small>supports .txt and .lst files (max 10MB)</small>
                   </div>
                   <div class="upload-controls" id="uploadControls" style="display: none;">
                     <span class="upload-filename" id="uploadFilename"></span>
-                    <button type="button" id="uploadBtn" class="btn btn-secondary">
-                      <i class="fas fa-upload"></i> Upload File
-                    </button>
                   </div>
                 </div>
                 <input name="wordlist" id="wordlist" type="hidden" />
-                <input name="use_default_wordlist" id="useDefault" type="hidden" value="false" />
+                <input name="use_default_wordlist" id="useDefault" type="hidden" value="true" />
               </div>
 
               <div class="form-group">
@@ -502,29 +499,62 @@
       }
     }
 
-    // FIX: Improved wordlist source handling
+    // clean wordlist source handling
     document.addEventListener('DOMContentLoaded', function() {
       const radioOptions = document.querySelectorAll('input[name="wordlist_source"]');
+      const uploadSection = document.getElementById('uploadSection');
+      const useDefaultInput = document.getElementById('useDefault');
+      const wordlistInput = document.getElementById('wordlist');
+      
+      function updateWordlistSource(value) {
+        if (value === 'upload') {
+          if (uploadSection) uploadSection.style.display = 'block';
+          if (useDefaultInput) useDefaultInput.value = 'false';
+        } else {
+          if (uploadSection) uploadSection.style.display = 'none';
+          if (useDefaultInput) useDefaultInput.value = 'true';
+          if (wordlistInput) wordlistInput.value = '';
+          
+          // reset upload state
+          if (window.uploadState) {
+            window.uploadState.isFileUploaded = false;
+            window.uploadState.uploadedFilePath = '';
+          }
+          
+          // reset upload ui
+          const uploadPlaceholder = document.getElementById('uploadPlaceholder');
+          const uploadControls = document.getElementById('uploadControls');
+          const fileInput = document.getElementById('uploadFile');
+          
+          if (uploadPlaceholder) uploadPlaceholder.style.display = 'block';
+          if (uploadControls) uploadControls.style.display = 'none';
+          if (fileInput) fileInput.value = '';
+        }
+      }
+      
       radioOptions.forEach(radio => {
         radio.addEventListener('change', function() {
-          const uploadSection = document.getElementById('uploadSection');
-          const useDefault = document.getElementById('useDefault');
-          const wordlistInput = document.getElementById('wordlist');
-          
-          if (this.value === 'upload') {
-            uploadSection.style.display = 'block';
-            if (useDefault) useDefault.value = 'false';
-          } else {
-            uploadSection.style.display = 'none';
-            if (useDefault) useDefault.value = 'true';
-            if (wordlistInput) wordlistInput.value = '';
+          if (this.checked) {
+            updateWordlistSource(this.value);
           }
         });
       });
       
-      const useDefaultEl = document.getElementById('useDefault');
-      if (useDefaultEl) {
-        useDefaultEl.value = 'true';
+      // set initial state
+      const defaultRadio = document.querySelector('input[name="wordlist_source"][value="default"]');
+      if (defaultRadio && defaultRadio.checked) {
+        updateWordlistSource('default');
+      }
+      
+      if (useDefaultInput) useDefaultInput.value = 'true';
+      if (wordlistInput) wordlistInput.value = '';
+      
+      // initialize global upload state
+      if (!window.uploadState) {
+        window.uploadState = {
+          isFileUploaded: false,
+          uploadedFilePath: ''
+        };
       }
     });
 
