@@ -7,13 +7,14 @@ import (
 
 type Params struct {
 	Salt []byte
-  BcryptCost int
+	BcryptCost int
 	ScryptN int
 	ScryptR int
 	ScryptP int
 	ArgonTime uint32
 	ArgonMemoryKB uint32
 	ArgonParallelism uint8
+	PBKDF2Iterations int
 }
 
 type Hasher interface {

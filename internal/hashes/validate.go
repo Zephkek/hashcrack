@@ -15,6 +15,7 @@ var (
 	reBcrypt   = regexp.MustCompile(`^\$2[aby]\$\d{2}\$`) // https://man.archlinux.org/man/crypt.5.en
 	reScrypt   = regexp.MustCompile(`^scrypt:[0-9a-fA-F]+:[0-9a-fA-F]+$`) // https://hashcat.net/forum/archive/index.php?thread-8537.html=&utm_source=chatgpt.com
 	reArgon2   = regexp.MustCompile(`^argon2id:[0-9a-fA-F]+:[0-9a-fA-F]+$`) // https://security.stackexchange.com/questions/222744/which-part-of-this-encoded-argon2-hash-is-the-salt
+	rePBKDF2   = regexp.MustCompile(`^pbkdf2-(sha1|sha256|sha512):[0-9a-fA-F]+:\d+:[0-9a-fA-F]+$`) // pbkdf2-hash:salt:iter:key
 )
 
 func Validate(algo, target string) (bool, string) {
@@ -41,6 +42,24 @@ func Validate(algo, target string) (bool, string) {
 	case "sha512":
 		if len(t) == 128 && reHex.MatchString(t) { return true, "" }
 		return false, "SHA512 must be 128 hex chars"
+	case "sha3-224":
+		if len(t) == 56 && reHex.MatchString(t) { return true, "" }
+		return false, "SHA3-224 must be 56 hex chars"
+	case "sha3-256":
+		if len(t) == 64 && reHex.MatchString(t) { return true, "" }
+		return false, "SHA3-256 must be 64 hex chars"
+	case "sha3-384":
+		if len(t) == 96 && reHex.MatchString(t) { return true, "" }
+		return false, "SHA3-384 must be 96 hex chars"
+	case "sha3-512":
+		if len(t) == 128 && reHex.MatchString(t) { return true, "" }
+		return false, "SHA3-512 must be 128 hex chars"
+	case "shake128":
+		if len(t) == 64 && reHex.MatchString(t) { return true, "" }
+		return false, "SHAKE128 must be 64 hex chars (256-bit output)"
+	case "shake256":
+		if len(t) == 128 && reHex.MatchString(t) { return true, "" }
+		return false, "SHAKE256 must be 128 hex chars (512-bit output)"
 	case "ntlm", "lm":
 		if len(t) == 32 && reHex.MatchString(t) { return true, "Note: 32-hex also used by MD5; ensure correct algo" }
 		return false, strings.ToUpper(a)+" must be 32 hex chars"
@@ -65,6 +84,15 @@ func Validate(algo, target string) (bool, string) {
 	case "argon2id":
 		if reArgon2.MatchString(t) { return true, "" }
 		return false, "argon2id must be argon2id:<saltHex>:<keyHex>"
+	case "pbkdf2-sha1":
+		if rePBKDF2.MatchString(t) && strings.HasPrefix(t, "pbkdf2-sha1:") { return true, "" }
+		return false, "pbkdf2-sha1 must be pbkdf2-sha1:<saltHex>:<iter>:<keyHex>"
+	case "pbkdf2-sha256":
+		if rePBKDF2.MatchString(t) && strings.HasPrefix(t, "pbkdf2-sha256:") { return true, "" }
+		return false, "pbkdf2-sha256 must be pbkdf2-sha256:<saltHex>:<iter>:<keyHex>"
+	case "pbkdf2-sha512":
+		if rePBKDF2.MatchString(t) && strings.HasPrefix(t, "pbkdf2-sha512:") { return true, "" }
+		return false, "pbkdf2-sha512 must be pbkdf2-sha512:<saltHex>:<iter>:<keyHex>"
 	default:
 		return true, ""
 	}

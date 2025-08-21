@@ -17,6 +17,8 @@ func Detect(target string) []string {
         "sha1", "ripemd160",
         "mysql",
         "sha256", "sha384", "sha512",
+        "sha3-224", "sha3-256", "sha3-384", "sha3-512",
+        "shake128", "shake256",
         "cisco7", "ldap_md5", "ldap_sha1",
     }
 

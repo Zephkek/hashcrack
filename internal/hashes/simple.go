@@ -7,6 +7,7 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"strings"
+	"golang.org/x/crypto/sha3"
 )
 
 type simpleHasher struct { algo string }
@@ -25,6 +26,26 @@ func (s simpleHasher) hashBytes(b []byte) []byte {
 		v := sha512.Sum384(b); return v[:]
 	case "sha512":
 		v := sha512.Sum512(b); return v[:]
+	case "sha3-224":
+		v := sha3.Sum224(b); return v[:]
+	case "sha3-256":
+		v := sha3.Sum256(b); return v[:]
+	case "sha3-384":
+		v := sha3.Sum384(b); return v[:]
+	case "sha3-512":
+		v := sha3.Sum512(b); return v[:]
+	case "shake128":
+		h := sha3.NewShake128()
+		h.Write(b)
+		out := make([]byte, 32) // 256-bit output for SHAKE128
+		h.Read(out)
+		return out
+	case "shake256":
+		h := sha3.NewShake256()
+		h.Write(b)
+		out := make([]byte, 64) // 512-bit output for SHAKE256
+		h.Read(out)
+		return out
 	default:
 		return nil
 	}
@@ -46,4 +67,10 @@ func init() {
 	Register(simpleHasher{"sha256"})
 	Register(simpleHasher{"sha384"})
 	Register(simpleHasher{"sha512"})
+	Register(simpleHasher{"sha3-224"})
+	Register(simpleHasher{"sha3-256"})
+	Register(simpleHasher{"sha3-384"})
+	Register(simpleHasher{"sha3-512"})
+	Register(simpleHasher{"shake128"})
+	Register(simpleHasher{"shake256"})
 }
