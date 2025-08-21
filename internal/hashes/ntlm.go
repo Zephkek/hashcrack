@@ -32,4 +32,20 @@ func (n ntlmHasher) Compare(target string, plain string, p Params) (bool, error)
 	return strings.EqualFold(h, target), nil
 }
 
+func (n ntlmHasher) CompareBytes(target string, plain []byte, _ Params) (bool, error) {
+	rs := []rune(string(plain))
+	utf16s := utf16.Encode(rs)
+	b := make([]byte, len(utf16s)*2)
+	for i, v := range utf16s {
+		b[i*2] = byte(v)
+		b[i*2+1] = byte(v >> 8)
+	}
+	h := md4.New()
+	_, _ = h.Write(b)
+	sum := h.Sum(nil)
+	enc := make([]byte, hex.EncodedLen(len(sum)))
+	hex.Encode(enc, sum)
+	return strings.EqualFold(string(enc), target), nil
+}
+
 func init() { Register(ntlmHasher{}) }
