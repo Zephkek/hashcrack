@@ -444,7 +444,6 @@ section {
   margin-left: auto;
 }
 
-/* Upload section */
 .upload-section {
   margin-top: var(--space-lg);
 }
@@ -470,6 +469,7 @@ section {
   font-size: 3rem;
   color: var(--primary-color);
   margin-bottom: var(--space-md);
+  display: block; /* FIX: Ensure block display */
 }
 
 .upload-placeholder span {
@@ -482,6 +482,26 @@ section {
 
 .upload-placeholder small {
   color: var(--text-muted);
+  display: block; /* FIX: Ensure block display */
+}
+
+/* FIX: New upload controls styling */
+.upload-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+.upload-filename {
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  font-weight: 500;
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Rules grid */
@@ -1314,3 +1334,4 @@ code {
 .hidden {
   display: none !important;
 }
+
