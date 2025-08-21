@@ -7,7 +7,7 @@ services:
     working_dir: /data
     volumes:
       - .:/data
-      # Use a named volume for uploads to avoid slow cross-OS bind mounts
+      # Use a named volume for uploads to avoid slow cross-OS bind mounts (here it's negligble i think but do it for the sake of it)
       - uploads-data:/data/uploads
     ports:
       - "8080:8080"
