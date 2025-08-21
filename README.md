@@ -22,7 +22,7 @@ HashCrack is a Go‑based, CPU hash‑cracking toolkit with a Web UI and a simpl
 - [Web UI](#web-ui)
 - [Project layout](#project-layout)
 - [API reference](#api-reference)
-- [Build from source (optional)](#build-from-source-optional)
+- [Build from source (optional)](#build-from-source-optional-and-not-needed)
 - [Troubleshooting](#troubleshooting)
 
 ---
