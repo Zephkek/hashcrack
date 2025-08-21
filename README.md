@@ -10,10 +10,10 @@
   - Simple rules (+u, +l, +c, +d1, +d2)
   - Event/log hook for UI or CLI
   - Attack methods backend
+  - Actual Web server backend
 
 
 ## In progress
-- Actual Web server backend
 - CLI interface
 - UI/UX
 
