@@ -14,6 +14,8 @@ import (
 // go concurrency still sucks but better than doing this in.. god forbid.. python....
 type ConcurrentBruteForcer struct {
 	charset   []rune
+	charsetB  []byte
+	asciiOnly bool
 	minLen    int
 	maxLen    int
 	workers   int
@@ -44,8 +46,22 @@ func New(charset string, minLen, maxLen, workers int) *ConcurrentBruteForcer {
 		batchSize = 20000
 	}
 	
+	rs := []rune(charset)
+	ascii := true
+	bs := make([]byte, len(rs))
+	for i, r := range rs {
+		if r > 0x7F { ascii = false }
+		if r <= 0xFF {
+			bs[i] = byte(r)
+		} else {
+			// placeholder
+			bs[i] = 0
+		}
+	}
 	return &ConcurrentBruteForcer{
-		charset:   []rune(charset),
+		charset:   rs,
+		charsetB:  bs,
+		asciiOnly: ascii,
 		minLen:    minLen,
 		maxLen:    maxLen,
 		workers:   workers,
@@ -173,27 +189,70 @@ func (bf *ConcurrentBruteForcer) processWorkItem(
 	digits := bf.indexToDigits(item.startIndex, item.length)
 	bf.digitsToBuf(digits, buf)
 	attempts := item.endIndex - item.startIndex
+	// Prepare fast-path interfaces if available
+	bc, _ := hasher.(hashes.ByteComparer)
+	bbc, _ := hasher.(hashes.BatchByteComparer)
+	// small batch buffer for batch hashing, tuned for SIMD servers (16 lanes)
+	const lane = 16
+	batch := make([][]byte, 0, lane)
+	// candidate byte buffer reused when asciiOnly
+	cand := make([]byte, item.length)
 
 	for n := uint64(0); n < attempts; n++ {
-		candidate := string(buf[:item.length])
-
-		ok, _ := hasher.Compare(target, candidate, params)
-		(*localPending)++
-
-		if ok {
-			return candidate
+		if bf.asciiOnly && (bbc != nil || bc != nil) {
+			// Fast ASCII path: map digits to bytes directly with no string alloc
+			for i := 0; i < item.length; i++ {
+				cand[i] = bf.charsetB[digits[i]]
+			}
+			if bbc != nil {
+				// batch
+				b := make([]byte, item.length)
+				copy(b, cand[:item.length])
+				batch = append(batch, b)
+				(*localPending)++
+				if len(batch) == lane || n+1 == attempts {
+					if idx, _ := bbc.CompareBatchHex(target, batch, params); idx >= 0 {
+						return string(batch[idx])
+					}
+					batch = batch[:0]
+				}
+			} else { // bc only
+				ok, _ := bc.CompareBytes(target, cand[:item.length], params)
+				(*localPending)++
+				if ok {
+					return string(cand[:item.length])
+				}
+			}
+		} else {
+			// Fallback path using strings
+			candidate := string(buf[:item.length])
+			if bbc != nil {
+				batch = append(batch, []byte(candidate))
+				(*localPending)++
+				if len(batch) == lane || n+1 == attempts {
+					if idx, _ := bbc.CompareBatchHex(target, batch, params); idx >= 0 {
+						return string(batch[idx])
+					}
+					batch = batch[:0]
+				}
+			} else {
+				ok, _ := hasher.Compare(target, candidate, params)
+				(*localPending)++
+				if ok { return candidate }
+			}
 		}
 
 		if n+1 < attempts {
-			bf.incrementDigits(digits)
-			bf.digitsToBuf(digits, buf)
+			bf.incDigitsAndBuf(digits, buf)
 		}
 
 		for *localPending >= progressInterval {
 			globalCount := atomic.AddUint64(globalTried, progressInterval)
 			*localPending -= progressInterval
 			if progressCb != nil {
-				progressCb(globalCount, total, candidate, item.length)
+				// provide a recent candidate for visibility
+				recent := string(buf[:item.length])
+				progressCb(globalCount, total, recent, item.length)
 			}
 		}
 	}
@@ -289,5 +348,20 @@ func (bf *ConcurrentBruteForcer) incrementDigits(digits []int) {
 			return
 		}
 		digits[i] = 0
+	}
+}
+
+// increment digits and update buf at the changed positions to avoid full remap
+func (bf *ConcurrentBruteForcer) incDigitsAndBuf(digits []int, buf []rune) {
+	base := len(bf.charset)
+	for i := len(digits) - 1; i >= 0; i-- {
+		d := digits[i] + 1
+		if d < base {
+			digits[i] = d
+			buf[i] = bf.charset[d]
+			return
+		}
+		digits[i] = 0
+		buf[i] = bf.charset[0]
 	}
 }
