@@ -27,12 +27,12 @@ var (
 	logPath  string
 	verbose  bool
 )
-
+// cleaner description
 var rootCmd = &cobra.Command{
 	Use:   "hashcrack",
 	Short: "HashCrack - A fast, concurrent hash-cracking toolkit",
 	Long: `HashCrack is a high-performance hash cracking tool designed for 
-cybersecurity education and research purposes.`,
+cybersecurity education and research purposes.`, 
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		if config != "" {
 			viper.SetConfigFile(config)
