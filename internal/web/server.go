@@ -610,15 +610,15 @@ func (s *Server) handleUploads(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
-	// cancellable ctx
+	// Create cancellable context
 	ctx, cancel := context.WithCancel(context.Background())
 	
-	// store cancel func
+	// Store cancel function
 	s.m.mu.Lock()
 	s.m.contexts[id] = cancel
 	s.m.mu.Unlock()
 	
-	// cleanup
+	// Clean up on exit
 	defer func() {
 		s.m.mu.Lock()
 		delete(s.m.contexts, id)
@@ -626,7 +626,7 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 		cancel()
 	}()
 	
-	// check early cancel
+	// Check for early cancellation
 	s.m.mu.RLock()
 	if t.Status == "cancelled" || t.Status == "stopped" {
 		s.m.mu.RUnlock()
@@ -639,7 +639,7 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 	var lastProgressTime time.Time
 	var lastTriedCount uint64
 	
-	// clamp workers
+	// Clamp workers: minimum 1, max NumCPU
 	w := t.Workers
 	if w < 1 {
 		w = 1
@@ -648,7 +648,7 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 		w = runtime.NumCPU()
 	}
 	
-	// init progress
+	// Initialize progress tracking
 	t.UpdateProgress(func(p *TaskProgress) {
 		p.LastUpdated = time.Now()
 	})
@@ -660,7 +660,7 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 			t.Events = append(t.Events, kv)
 			eventMu.Unlock()
 			
-			// update progress
+			// Update progress based on event type
 			switch event {
 			case "start":
 				startTime = time.Now()
@@ -680,7 +680,7 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 					if tried, ok := kv["tried"].(uint64); ok {
 						p.Tried = tried
 						
-						// calc speed
+						// Calculate attempts per second
 						if !lastProgressTime.IsZero() {
 							timeDiff := now.Sub(lastProgressTime).Seconds()
 							triedDiff := tried - lastTriedCount
@@ -689,7 +689,7 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 							}
 						}
 						
-						// eta
+						// Calculate ETA
 						if p.Total > 0 && p.AttemptsPerSecond > 0 {
 							remaining := p.Total - tried
 							p.ETASeconds = float64(remaining) / p.AttemptsPerSecond
@@ -706,7 +706,7 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 						p.CurrentLength = length
 					}
 					
-					// sys metrics
+					// Update system metrics
 					var mem runtime.MemStats
 					runtime.ReadMemStats(&mem)
 					p.MemoryMB = float64(mem.Alloc) / 1024 / 1024
@@ -749,7 +749,7 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 		res, err = gen.Crack(ctx, c, h, params, t.Target)
 		
 	} else if mode == "bruteforce" {
-		// optimized bf
+		// High-performance bruteforce using optimized concurrent implementation
 		bfChars := t.BFChars
 		if bfChars == "" {
 			bfChars = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -761,21 +761,21 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 			t.BFMax = t.BFMin
 		}
 		
-		// new bruteforcer
+		// Use the new high-performance brute forcer
 		bf := bruteforce.New(bfChars, t.BFMin, t.BFMax, w)
 		
 		bfResult, bfErr := bf.Crack(ctx, h, params, t.Target, func(tried, total uint64, candidate string, currentLength int) {
-			// convert and report
+			// Convert to cracker.Result format and report progress
 			now := time.Now()
 			
 			t.UpdateProgress(func(p *TaskProgress) {
 				p.Tried = tried
-				// set total once
+				// Set total once; keep it stable so ETA doesn't fluctuate
 				if p.Total == 0 && total > 0 {
 					p.Total = total
 				}
 				
-				// speed + eta
+				// Calculate speed and ETA
 				if !lastProgressTime.IsZero() {
 					timeDiff := now.Sub(lastProgressTime).Seconds()
 					triedDiff := tried - lastTriedCount
@@ -795,7 +795,7 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 				p.CurrentCandidate = candidate
 				p.CurrentLength = currentLength
 				
-				// sys
+				// Update system metrics
 				var mem runtime.MemStats
 				runtime.ReadMemStats(&mem)
 				p.MemoryMB = float64(mem.Alloc) / 1024 / 1024
@@ -804,7 +804,7 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 			lastProgressTime = now
 			lastTriedCount = tried
 			
-			// log
+			// Log event
 			eventMu.Lock()
 			t.Events = append(t.Events, map[string]any{
 				"event":           "progress",
@@ -820,7 +820,7 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 		if bfErr != nil {
 			err = bfErr
 		} else {
-			// convert result
+			// Convert bruteforce result to cracker result
 			res = cracker.Result{
 				Found:     bfResult.Found,
 				Plaintext: bfResult.Plaintext,
@@ -830,25 +830,53 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 		}
 		
 	} else {
-		// wordlist
+		// wordlist mode
 		wl := strings.TrimSpace(t.Wordlist)
-		if t.UseDefaultWordlist && wl != "" {
-			t.Status = "error"
-			eventMu.Lock()
-			t.Events = append(t.Events, map[string]any{"error": "Choose either default wordlist or custom upload, not both."})
-			eventMu.Unlock()
-			return
-		}
+
+		// FIX: Handle default wordlist properly
 		if t.UseDefaultWordlist {
+			if wl != "" {
+				t.Status = "error"
+				eventMu.Lock()
+				t.Events = append(t.Events, map[string]any{"error": "Choose either default wordlist or custom upload, not both."})
+				eventMu.Unlock()
+				return
+			}
 			wl = "testdata/rockyou-mini.txt"
+
+			// FIX: Check if default wordlist exists
+			if _, err := os.Stat(wl); os.IsNotExist(err) {
+				t.Status = "error"
+				eventMu.Lock()
+				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Default wordlist not found: %s", wl)})
+				eventMu.Unlock()
+				return
+			}
+		} else {
+			// FIX: Handle custom wordlist paths
+			if wl == "" {
+				t.Status = "error"
+				eventMu.Lock()
+				t.Events = append(t.Events, map[string]any{"error": "Wordlist required (default or custom)."})
+				eventMu.Unlock()
+				return
+			}
+
+			// FIX: Proper path resolution for uploaded files
+			if strings.HasPrefix(wl, "/uploads/") {
+				wl = strings.TrimPrefix(wl, "/")
+			}
+
+			// FIX: Verify custom wordlist exists
+			if _, err := os.Stat(wl); os.IsNotExist(err) {
+				t.Status = "error"
+				eventMu.Lock()
+				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Wordlist file not found: %s", wl)})
+				eventMu.Unlock()
+				return
+			}
 		}
-		if wl == "" {
-			t.Status = "error"
-			eventMu.Lock()
-			t.Events = append(t.Events, map[string]any{"error": "Wordlist required (default or custom)."})
-			eventMu.Unlock()
-			return
-		}
+
 		res, err = c.CrackWordlist(ctx, h, params, t.Target, wl)
 	}
 	
@@ -867,15 +895,16 @@ func (s *Server) runTask(id string, t *Task, h hashes.Hasher) {
 		t.Status = "done"
 	}
 	
-	// final update
+	// Final progress update
 	t.UpdateProgress(func(p *TaskProgress) {
 		p.Tried = res.Tried
 		if p.Total > 0 {
 			p.ProgressPercent = float64(res.Tried) / float64(p.Total) * 100
 		}
-		p.ETASeconds = 0 // done
+		p.ETASeconds = 0 // Task is complete
 	})
 }
+
 
 func (s *Server) Start(addr string) error {
 	log.Printf("Starting HashCrack web server on %s", addr)
