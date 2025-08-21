@@ -1,42 +1,51 @@
 package hashes
 
 import (
-	"fmt"
-	"sort"
+	"encoding/hex"
+	"unicode/utf16"
+	"strings"
+
+	"golang.org/x/crypto/md4"
 )
 
-type Params struct {
-	Salt []byte
-	BcryptCost int
-	ScryptN int
-	ScryptR int
-	ScryptP int
-	ArgonTime uint32
-	ArgonMemoryKB uint32
-	ArgonParallelism uint8
-	PBKDF2Iterations int
-}
+type ntlmHasher struct{}
 
-type Hasher interface {
-	Name() string
-	Hash(plain string, p Params) (string, error)
-	Compare(target string, plain string, p Params) (bool, error)
-}
+func (n ntlmHasher) Name() string { return "ntlm" }
 
-var registry = map[string]Hasher{}
-
-func Register(h Hasher) { registry[h.Name()] = h }
-
-func Get(name string) (Hasher, error) {
-	if h, ok := registry[name]; ok {
-		return h, nil
+func (n ntlmHasher) Hash(plain string, _ Params) (string, error) {
+	//convert to UTF-16LE
+	runes := []rune(plain)
+	utf16s := utf16.Encode(runes)
+	b := make([]byte, len(utf16s)*2)
+	for i, v := range utf16s {
+		b[i*2] = byte(v)
+		b[i*2+1] = byte(v >> 8)
 	}
-	return nil, fmt.Errorf("unknown algorithm: %s", name)
+	h := md4.New()
+	_, _ = h.Write(b)
+	sum := h.Sum(nil)
+	return hex.EncodeToString(sum), nil
 }
 
-func List() []string {
-	out := make([]string, 0, len(registry))
-	for k := range registry { out = append(out, k) }
-	sort.Strings(out)
-	return out
+func (n ntlmHasher) Compare(target string, plain string, p Params) (bool, error) {
+	h, _ := n.Hash(plain, p)
+	return strings.EqualFold(h, target), nil
 }
+
+func (n ntlmHasher) CompareBytes(target string, plain []byte, _ Params) (bool, error) {
+	rs := []rune(string(plain))
+	utf16s := utf16.Encode(rs)
+	b := make([]byte, len(utf16s)*2)
+	for i, v := range utf16s {
+		b[i*2] = byte(v)
+		b[i*2+1] = byte(v >> 8)
+	}
+	h := md4.New()
+	_, _ = h.Write(b)
+	sum := h.Sum(nil)
+	enc := make([]byte, hex.EncodedLen(len(sum)))
+	hex.Encode(enc, sum)
+	return strings.EqualFold(string(enc), target), nil
+}
+
+func init() { Register(ntlmHasher{}) }
