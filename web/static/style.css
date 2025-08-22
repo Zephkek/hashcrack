@@ -806,7 +806,7 @@ section {
 
 /* Keep status and actions columns compact */
 .tasks-table thead th:nth-child(3),
-.tasks-table tbody td:nth-child(3) { width: 100px; }
+.tasks-table tbody td:nth-child(3) { width: 120px; }
 .tasks-table thead th:nth-child(6),
 .tasks-table tbody td:nth-child(6) { width: 90px; }
 
@@ -842,7 +842,7 @@ section {
   text-transform: uppercase;
   letter-spacing: 0.025em;
   display: inline-block;
-  max-width: 6rem;
+  max-width: 8rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -865,6 +865,16 @@ section {
   color: white;
 }
 
+.badge-paused {
+  background: #64748b; /* slate */
+  color: white;
+}
+
+.badge-stopped {
+  background: #475569; /* darker slate */
+  color: white;
+}
+
 .badge-queued {
   background: var(--warning-color);
   color: white;
@@ -877,7 +887,7 @@ section {
 
 .tasks-table thead th:nth-child(3),
 .tasks-table tbody td:nth-child(3) {
-  width: 90px;
+  width: 120px;
   white-space: nowrap;
 }
 
@@ -1335,3 +1345,237 @@ code {
   display: none !important;
 }
 
+/* Add these styles to the end of your existing style.css file */
+
+/* Paused state styles */
+.badge-paused {
+  background: var(--warning-color);
+  color: white;
+}
+
+.badge-stopped {
+  background: var(--text-muted);
+  color: white;
+}
+
+.progress-info.paused {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  padding: var(--space-sm);
+  border-radius: var(--radius-sm);
+}
+
+.progress-bar.paused {
+  background: linear-gradient(90deg, var(--warning-color), #f59e0b);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+/* Resume indicator */
+.resume-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: var(--space-xs);
+  color: var(--success-color);
+  font-size: 0.75rem;
+  opacity: 0.8;
+  transition: opacity 0.2s ease;
+}
+
+.resume-indicator:hover {
+  opacity: 1;
+}
+
+/* Pause/Resume button styles */
+.btn-warning {
+  background: var(--warning-color);
+  color: white;
+}
+
+.btn-warning:hover {
+  background: #d97706;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.btn-success {
+  background: var(--success-color);
+  color: white;
+}
+
+.btn-success:hover {
+  background: #059669;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+/* State persistence notification */
+.state-notification {
+  position: fixed;
+  bottom: var(--space-lg);
+  right: var(--space-lg);
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-left: 4px solid var(--primary-color);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  box-shadow: var(--shadow-xl);
+  animation: slideIn 0.3s ease;
+  max-width: 400px;
+  z-index: 1001;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.state-notification i {
+  color: var(--primary-color);
+  font-size: 1.5rem;
+}
+
+.state-notification-content h4 {
+  margin: 0 0 var(--space-xs) 0;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.state-notification-content p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+/* Checkpoint indicator in progress */
+.checkpoint-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  background: rgba(99, 102, 241, 0.1);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  margin-left: var(--space-xs);
+}
+
+.checkpoint-indicator i {
+  color: var(--primary-color);
+  font-size: 0.6rem;
+}
+
+/* Session restore banner */
+.session-restore-banner {
+  background: linear-gradient(90deg, var(--primary-color), var(--primary-hover));
+  color: white;
+  padding: var(--space-md) var(--space-lg);
+  text-align: center;
+  font-size: 0.875rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+  animation: fadeIn 0.5s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.session-restore-banner i {
+  font-size: 1.125rem;
+  animation: rotate 2s linear infinite;
+}
+
+@keyframes rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Auto-save indicator */
+.auto-save-indicator {
+  position: fixed;
+  top: var(--space-lg);
+  right: var(--space-lg);
+  background: var(--secondary-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  z-index: 1002;
+}
+
+.auto-save-indicator.show {
+  opacity: 1;
+}
+
+.auto-save-indicator i {
+  color: var(--success-color);
+  animation: pulse 1s ease infinite;
+}
+
+/* Task action hover effects */
+.task-actions button {
+  transition: all 0.2s ease;
+}
+
+.task-actions button:hover {
+  transform: scale(1.1);
+}
+
+.task-actions button:active {
+  transform: scale(0.95);
+}
+
+/* Responsive adjustments for new buttons */
+@media (max-width: 768px) {
+  .task-actions {
+    flex-wrap: wrap;
+    gap: var(--space-xs);
+  }
+  
+  .btn-small {
+    padding: var(--space-xs);
+    font-size: 0.7rem;
+  }
+  
+  .state-notification {
+    bottom: var(--space-sm);
+    right: var(--space-sm);
+    left: var(--space-sm);
+    max-width: none;
+  }
+  
+  .session-restore-banner {
+    font-size: 0.75rem;
+    padding: var(--space-sm);
+  }
+}

@@ -31,6 +31,11 @@ type Result struct {
 	Duration  time.Duration `json:"duration_ns"`
 }
 
+type ResumableOptions struct {
+	StartLine      int64
+	CheckpointFunc func(line int64)
+}
+
 type Cracker struct {
 	opts    Options
 	logMu   sync.Mutex
@@ -73,6 +78,10 @@ func (c *Cracker) logEvent(event string, kv map[string]any) {
 }
 
 func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.Params, target string, wordlistPath string) (Result, error) {
+	return c.CrackWordlistResumable(ctx, h, p, target, wordlistPath, ResumableOptions{})
+}
+
+func (c *Cracker) CrackWordlistResumable(ctx context.Context, h hashes.Hasher, p hashes.Params, target string, wordlistPath string, resumeOpts ResumableOptions) (Result, error) {
 	start := time.Now()
 	res := Result{}
 
@@ -86,9 +95,9 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 	defer f.Close()
 
 	workers := c.opts.Workers
-	if workers <= 0 { workers = runtime.NumCPU() * 2 } // 5adema... barcha 5adema
-	if workers > runtime.NumCPU() * 4 { workers = runtime.NumCPU() * 4 } // cap at 4x CPU cores so it isn't excessive 
-	c.logEvent("start", map[string]any{"workers": workers, "algo": h.Name(), "wordlist": wordlistPath})
+	if workers <= 0 { workers = runtime.NumCPU() * 2 }
+	if workers > runtime.NumCPU() * 4 { workers = runtime.NumCPU() * 4 }
+	c.logEvent("start", map[string]any{"workers": workers, "algo": h.Name(), "wordlist": wordlistPath, "resume_line": resumeOpts.StartLine})
 
 	target = strings.TrimSpace(target)
 	var targetDigest []byte
@@ -106,10 +115,12 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 	var tried uint64
 	var found atomic.Bool
 	var plaintext atomic.Value
+	var currentLine int64
 
-	workChan := make(chan string, workers*8)
+	// We will use a single scanner below and skip to StartLine once
+
+	workChan := make(chan workItem, workers*8)
 	
-	// added: sync.WaitGroup  per worker
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -122,7 +133,7 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 				case <-ctx.Done():
 					atomic.AddUint64(&tried, localTried)
 					return
-				case word, ok := <-workChan:
+				case work, ok := <-workChan:
 					if !ok {
 						atomic.AddUint64(&tried, localTried)
 						return
@@ -132,16 +143,14 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 						continue
 					}
 					
-					candidates := []string{word}
+					candidates := []string{work.word}
 					if c.opts.Transform != nil {
-						if xs := c.opts.Transform(word); len(xs) > 0 { 
+						if xs := c.opts.Transform(work.word); len(xs) > 0 { 
 							candidates = xs 
 						}
 					}
 					
-					// If hasher supports batching and we have many candidates (from transforms), try batch.
 					if bbd, ok := h.(hashes.BatchByteDigester); ok && len(candidates) >= 4 && byteDigester != nil && len(targetDigest) > 0 {
-						// Batch size tuned for md5-simd lanes; allow smaller batches too.
 						batch := make([][]byte, 0, len(candidates))
 						for _, cnd := range candidates { batch = append(batch, []byte(cnd)) }
 						sums, _ := bbd.DigestMany(batch, p)
@@ -162,7 +171,13 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 							globalCount := atomic.AddUint64(&tried, 1000)
 							localTried = 0
 							every := c.opts.ProgressEvery; if every == 0 { every = 5000 }
-							if globalCount%every == 0 { c.logEvent("progress", map[string]any{"tried": globalCount}) }
+							if globalCount%every == 0 { 
+								c.logEvent("progress", map[string]any{"tried": globalCount, "line": work.line})
+								// Call checkpoint function if provided
+								if resumeOpts.CheckpointFunc != nil {
+									resumeOpts.CheckpointFunc(work.line)
+								}
+							}
 						}
 						continue
 					}
@@ -188,22 +203,27 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 							c.logEvent("found", map[string]any{
 								"candidate": cand, 
 								"tried": globalCount,
+								"line": work.line,
 							})
 							return
 						}
-						// batch them all and process
+						
 						if localTried%1000 == 0 {
 							globalCount := atomic.AddUint64(&tried, 1000)
 							localTried = 0 
 							
-							// More frequent and consistent progress reporting
 							every := c.opts.ProgressEvery
-							if every == 0 { every = 5000 } // Smaller default for more stable updates
+							if every == 0 { every = 5000 }
 							if globalCount%every == 0 { 
 								c.logEvent("progress", map[string]any{
 									"tried": globalCount,
 									"candidate": cand,
-								}) 
+									"line": work.line,
+								})
+								// Call checkpoint function if provided
+								if resumeOpts.CheckpointFunc != nil {
+									resumeOpts.CheckpointFunc(work.line)
+								}
 							}
 						}
 					}
@@ -213,21 +233,29 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 	}
 
 	scanner := bufio.NewScanner(f)
-	buf := make([]byte, 0, 2*1024*1024) // 2MB buffer
+	buf := make([]byte, 0, 2*1024*1024)
 	scanner.Buffer(buf, 2*1024*1024)
+	
+	// Skip to resume point
+	if resumeOpts.StartLine > 0 {
+		for i := int64(0); i < resumeOpts.StartLine && scanner.Scan(); i++ {
+			currentLine++
+		}
+	}
 	
 	// Feed work to workers
 	go func() {
 		defer close(workChan)
 		
 		for scanner.Scan() {
+			currentLine++
 			line := strings.TrimRight(scanner.Text(), "\r\n")
 			if line == "" {
 				continue
 			}
 			
 			select {
-			case workChan <- line:
+			case workChan <- workItem{word: line, line: currentLine}:
 			case <-ctx.Done():
 				return
 			}
@@ -258,7 +286,11 @@ func (c *Cracker) CrackWordlist(ctx context.Context, h hashes.Hasher, p hashes.P
 	return res, nil
 }
 
-// constEq does constant-time comparison of two equal-length byte slices.
+type workItem struct {
+	word string
+	line int64
+}
+
 func constEq(a, b []byte) bool {
 	if len(a) != len(b) { return false }
 	var v byte

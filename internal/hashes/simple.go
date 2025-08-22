@@ -26,12 +26,10 @@ func getMD5Server() md5simd.Server {
 	return md5Srv
 }
 
-// DigestMany implements BatchByteDigester for md5 and sha256.
 func (s simpleHasher) DigestMany(plains [][]byte, p Params) ([][]byte, error) {
 	switch s.algo {
 	case "md5":
 		srv := getMD5Server()
-	// Create N hashers and feed; md5-simd server parallelizes lanes internally.
 		out := make([][]byte, len(plains))
 		hs := make([]md5simd.Hasher, len(plains))
 		for i := range hs { hs[i] = srv.NewHash() }
@@ -42,7 +40,6 @@ func (s simpleHasher) DigestMany(plains [][]byte, p Params) ([][]byte, error) {
 		for i, h := range hs { out[i] = h.Sum(nil); h.Close() }
 		return out, nil
 	case "sha256":
-		// Use sha256-simd Sum256 per input; there is no explicit server API exposed, but Sum256 is fast.
 		out := make([][]byte, len(plains))
 		for i, b := range plains {
 			bb := append(append([]byte(nil), b...), p.Salt...)
@@ -51,7 +48,6 @@ func (s simpleHasher) DigestMany(plains [][]byte, p Params) ([][]byte, error) {
 		}
 		return out, nil
 	default:
-		// Fallback: single hashing
 		out := make([][]byte, len(plains))
 		for i, b := range plains {
 			d, _ := s.DigestBytes(b, p)
@@ -61,9 +57,6 @@ func (s simpleHasher) DigestMany(plains [][]byte, p Params) ([][]byte, error) {
 	}
 }
 
-// DigestBytes implements ByteDigester for simple hash algorithms that produce
-// fixed-size digests and are typically hex-encoded in textual form. This avoids
-// the hex encoding and string allocations on hot paths.
 func (s simpleHasher) DigestBytes(plain []byte, p Params) ([]byte, error) {
 	switch s.algo {
 	case "md5":
@@ -73,7 +66,6 @@ func (s simpleHasher) DigestBytes(plain []byte, p Params) ([]byte, error) {
 		} else {
 			plain = append(append([]byte(nil), plain...), p.Salt...)
 		}
-		// For tiny messages, stdlib md5 is faster than md5-simd setup overhead.
 		if len(plain) < 64 {
 			v := md5.Sum(plain)
 			return v[:], nil
@@ -141,14 +133,14 @@ func (s simpleHasher) DigestBytes(plain []byte, p Params) ([]byte, error) {
 		h := sha3.NewShake128()
 		_, _ = h.Write(plain)
 		if len(p.Salt) > 0 { _, _ = h.Write(p.Salt) }
-		out := make([]byte, 32) // 256-bit output for SHAKE128
+		out := make([]byte, 32)
 		_, _ = h.Read(out)
 		return out, nil
 	case "shake256":
 		h := sha3.NewShake256()
 		_, _ = h.Write(plain)
 		if len(p.Salt) > 0 { _, _ = h.Write(p.Salt) }
-		out := make([]byte, 64) // 512-bit output for SHAKE256
+		out := make([]byte, 64)
 		_, _ = h.Read(out)
 		return out, nil
 	default:
@@ -181,13 +173,13 @@ func (s simpleHasher) hashBytes(b []byte) []byte {
 	case "shake128":
 		h := sha3.NewShake128()
 		h.Write(b)
-		out := make([]byte, 32) // 256-bit output for SHAKE128
+		out := make([]byte, 32)
 		h.Read(out)
 		return out
 	case "shake256":
 		h := sha3.NewShake256()
 		h.Write(b)
-		out := make([]byte, 64) // 512-bit output for SHAKE256
+		out := make([]byte, 64)
 		h.Read(out)
 		return out
 	default:
@@ -201,13 +193,9 @@ func (s simpleHasher) Hash(plain string, p Params) (string, error) {
 }
 
 func (s simpleHasher) Compare(target string, plain string, p Params) (bool, error) {
-	// Fast path: if target is hex and algorithm supports digest bytes, avoid
-	// building hex strings and compare bytes directly.
 	if bd, ok := interface{}(s).(ByteDigester); ok {
-		// Accept optional 0x prefix; case-insensitive
 		t := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(target)), "0x")
 		if tb, err := hex.DecodeString(t); err == nil {
-			// Pass only plaintext; DigestBytes adds salt internally
 			sum, _ := bd.DigestBytes([]byte(plain), p)
 			if len(sum) != len(tb) { return false, nil }
 			var v byte

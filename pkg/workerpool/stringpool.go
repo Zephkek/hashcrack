@@ -5,8 +5,6 @@ import (
 	"sync"
 )
 
-// basic worker pool for processing strings, submit return pool will give you false when context is done.
-
 type StringPool struct {
 	ctx     context.Context
 	cancel  context.CancelFunc

@@ -27,7 +27,7 @@ var (
 	logPath  string
 	verbose  bool
 )
-// cleaner description
+
 var rootCmd = &cobra.Command{
 	Use:   "hashcrack",
 	Short: "HashCrack - A fast, concurrent hash-cracking toolkit",
@@ -83,14 +83,12 @@ var listCmd = &cobra.Command{
 }
 
 func init() {
-	// Global flags
 	rootCmd.PersistentFlags().IntVarP(&workers, "workers", "w", 0, "Number of worker threads (default: CPU cores)")
 	rootCmd.PersistentFlags().DurationVar(&timeout, "timeout", 0, "Timeout for cracking attempts")
 	rootCmd.PersistentFlags().StringVar(&config, "config", "", "Config file path")
 	rootCmd.PersistentFlags().StringVar(&logPath, "log", "", "Log file path for events")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
 
-	// crack command flags
 	crackCmd.Flags().StringP("algorithm", "a", "auto", "Hash algorithm (auto-detect by default)")
 	crackCmd.Flags().StringP("hash", "h", "", "Target hash to crack (required)")
 	crackCmd.Flags().StringP("wordlist", "w", "", "Wordlist file path")
@@ -102,13 +100,11 @@ func init() {
 	crackCmd.Flags().String("rules", "", "Comma-separated transformation rules (+u,+l,+c,+d1,+d2)")
 	crackCmd.MarkFlagRequired("hash")
 
-	// batch command flags
 	batchCmd.Flags().StringP("file", "f", "", "Batch file path (required)")
 	batchCmd.Flags().StringP("wordlist", "w", "", "Wordlist file path")
 	batchCmd.Flags().String("output", "", "Output file for results")
 	batchCmd.MarkFlagRequired("file")
 
-	// web command flags
 	webCmd.Flags().String("addr", ":8080", "Server address (host:port)")
 	webCmd.Flags().String("static", "web/static", "Static files directory")
 	webCmd.Flags().String("templates", "web/templates", "Template files directory")
@@ -118,7 +114,6 @@ func init() {
 	rootCmd.AddCommand(webCmd)
 	rootCmd.AddCommand(listCmd)
 
-	// Viper setup
 	viper.SetEnvPrefix("HASHCRACK")
 	viper.AutomaticEnv()
 	viper.SetDefault("workers", runtime.NumCPU())
@@ -134,7 +129,6 @@ func runCrack(cmd *cobra.Command, args []string) error {
 	salt, _ := cmd.Flags().GetString("salt")
 	rulesStr, _ := cmd.Flags().GetString("rules")
 
-	// auto-detect algorithm if needed
 	if algo == "auto" {
 		detected := hashes.Detect(targetHash)
 		if len(detected) == 0 {
@@ -144,7 +138,6 @@ func runCrack(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Detected algorithm: %s\n", algo)
 	}
 
-	// Validate algorithm vs target format before proceeding
 	if ok, msg := hashes.Validate(algo, targetHash); !ok {
 		if strings.TrimSpace(msg) == "" {
 			msg = "selected algorithm does not match target hash format"
@@ -255,7 +248,6 @@ func runBatch(cmd *cobra.Command, args []string) error {
 	}
 	defer file.Close()
 
-	// TODO: implement batch processing
 	fmt.Printf("Batch processing from %s\n", batchFile)
 	if wordlist != "" {
 		fmt.Printf("Using wordlist: %s\n", wordlist)
@@ -278,13 +270,15 @@ func runWeb(cmd *cobra.Command, args []string) error {
 	
 	go func() {
 		<-sigChan
-		fmt.Println("\nShutting down web server...")
-		os.Exit(0)
+		log.Println("\nShutting down web server...")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	manager.Shutdown(ctx)
+	os.Exit(0)
 	}()
-	
-	fmt.Printf("Starting HashCrack Web UI on %s\n", addr)
-	fmt.Printf("Open your browser and navigate to http://localhost%s\n", addr)
-	
+    
+	log.Printf("Open your browser at: http://localhost%s", addr)
+    
 	return server.Start(addr)
 }
 

@@ -13,7 +13,6 @@ type ntlmHasher struct{}
 func (n ntlmHasher) Name() string { return "ntlm" }
 
 func (n ntlmHasher) Hash(plain string, _ Params) (string, error) {
-	//convert to UTF-16LE
 	runes := []rune(plain)
 	utf16s := utf16.Encode(runes)
 	b := make([]byte, len(utf16s)*2)

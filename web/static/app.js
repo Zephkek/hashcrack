@@ -4,7 +4,9 @@ function badge(status){
     running: 'badge badge-run', 
     done: 'badge badge-done', 
     queued: 'badge badge-queued', 
-    error: 'badge badge-error'
+    error: 'badge badge-error',
+    paused: 'badge badge-paused',
+    stopped: 'badge badge-stopped'
   };
   return `<span class="${m[status]||'badge'}">${status}</span>`;
 }
@@ -59,6 +61,16 @@ window.renderTasks = function(tasks){
           </div>
         </div>
       </div>`;
+    } else if (t.status === 'paused' && t.progress) {
+      const p = t.progress;
+      const percent = p.progress_percent ? Math.min(p.progress_percent, 100).toFixed(1) + '%' : '';
+      progress = `<div class="progress-info paused">
+        <div class="progress-bar-container">
+          <div class="progress-bar paused" style="width: ${Math.min(p.progress_percent || 0, 100)}%"></div>
+          <span class="progress-text">${formatNumber(tried)}${p.total ? ` / ${formatNumber(p.total)}` : ''}</span>
+        </div>
+        <small class="muted"><i class="fas fa-pause-circle"></i> Paused at ${percent}</small>
+      </div>`;
     } else if (t.status === 'running' && tried) {
       progress = `<div class="progress-info basic">
         <div class="progress-spinner">
@@ -76,8 +88,40 @@ window.renderTasks = function(tasks){
     
     const modeInfo = getModeInfo(t);
     
+    // Add resume indicator if task was resumed
+    const resumeIndicator = (t.is_paused || t.last_checkpoint) ? 
+      `<span class="resume-indicator" title="This task can be resumed"><i class="fas fa-save"></i></span>` : '';
+    
+    // Generate action buttons based on status
+    let actions = '';
+    if (t.status === 'running') {
+      actions = `
+        <button class="btn-small btn-warning" onclick="pauseTask('${t.id}')" title="Pause task">
+          <i class="fas fa-pause"></i>
+        </button>
+        <button class="btn-small btn-secondary" onclick="stopTask('${t.id}')" title="Stop task">
+          <i class="fas fa-stop"></i>
+        </button>
+      `;
+    } else if (t.status === 'paused') {
+      actions = `
+        <button class="btn-small btn-success" onclick="resumeTask('${t.id}')" title="Resume task">
+          <i class="fas fa-play"></i>
+        </button>
+        <button class="btn-small btn-secondary" onclick="deleteTask('${t.id}')" title="Delete task">
+          <i class="fas fa-trash"></i>
+        </button>
+      `;
+    } else {
+      actions = `
+        <button class="btn-small btn-secondary" onclick="deleteTask('${t.id}')" title="Delete task">
+          <i class="fas fa-trash"></i>
+        </button>
+      `;
+    }
+    
     tr.innerHTML = `
-      <td><code>${t.id||''}</code></td>
+      <td><code>${t.id||''}</code> ${resumeIndicator}</td>
       <td>
         ${algoDisplay}
         <div class="mode-info">${modeInfo}</div>
@@ -87,10 +131,7 @@ window.renderTasks = function(tasks){
       <td>${result}</td>
       <td>
         <div class="task-actions">
-          ${t.status === 'running' ? 
-            '<button class="btn-small btn-secondary" onclick="stopTask(\'' + t.id + '\')"><i class="fas fa-stop"></i></button>' : 
-            '<button class="btn-small btn-secondary" onclick="deleteTask(\'' + t.id + '\')"><i class="fas fa-trash"></i></button>'
-          }
+          ${actions}
         </div>
       </td>
     `;
@@ -214,7 +255,6 @@ function showStep(step) {
   }
 }
 
-// improved task creation 
 async function createTask(evt){
   evt.preventDefault();
   const form = evt.target;
@@ -247,7 +287,6 @@ async function createTask(evt){
     form.reset();
     showStep(1);
     
-    // reset upload section
     const uploadPlaceholder = document.getElementById('uploadPlaceholder');
     const uploadControls = document.getElementById('uploadControls');
     const uploadSection = document.getElementById('uploadSection');
@@ -271,7 +310,6 @@ async function createTask(evt){
   }
 }
 
-// clean form data collection
 function collectFormData(form) {
   const fd = new FormData(form);
   const payload = Object.fromEntries(fd.entries());
@@ -321,7 +359,6 @@ function collectFormData(form) {
   return payload;
 }
 
-// clean validation 
 function validatePayload(payload) {
   if (!payload.target || !payload.target.trim()) {
     showToast('please enter a target hash', 'error');
@@ -381,13 +418,103 @@ function validatePayload(payload) {
   return true;
 }
 
+// New pause/resume functions
+async function pauseTask(taskId) {
+  try {
+    const res = await fetch(`/api/tasks/${taskId}/pause`, { method: 'POST' });
+    if (res.ok) {
+      showToast('Task paused. State saved for resumption.', 'success');
+      // Optimistic UI: update badge immediately to reduce flicker
+      const row = document.querySelector(`#tasks tbody tr[data-id="${taskId}"]`);
+      if (row) {
+        const statusCell = row.children[2];
+        if (statusCell) statusCell.innerHTML = badge('paused');
+        // Disable action buttons briefly
+        const buttons = row.querySelectorAll('.task-actions button');
+        buttons.forEach(b => b.disabled = true);
+        setTimeout(() => buttons.forEach(b => b.disabled = false), 600);
+      }
+      loadTasks();
+    } else {
+      const error = await res.text();
+      showToast('Failed to pause task: ' + error, 'error');
+    }
+  } catch (error) {
+    showToast('Error pausing task: ' + error.message, 'error');
+  }
+}
+
+async function resumeTask(taskId) {
+  try {
+    const res = await fetch(`/api/tasks/${taskId}/resume`, { method: 'POST' });
+    if (res.ok) {
+      showToast('Task resumed from saved state.', 'success');
+      const row = document.querySelector(`#tasks tbody tr[data-id="${taskId}"]`);
+      if (row) {
+        const statusCell = row.children[2];
+        if (statusCell) statusCell.innerHTML = badge('running');
+        const buttons = row.querySelectorAll('.task-actions button');
+        buttons.forEach(b => b.disabled = true);
+        setTimeout(() => buttons.forEach(b => b.disabled = false), 600);
+      }
+      loadTasks();
+    } else {
+      const error = await res.text();
+      showToast('Failed to resume task: ' + error, 'error');
+    }
+  } catch (error) {
+    showToast('Error resuming task: ' + error.message, 'error');
+  }
+}
+
+async function stopTask(taskId) {
+  try {
+    const res = await fetch(`/api/tasks/${taskId}/stop`, { method: 'POST' });
+    if (res.ok) {
+      showToast('Task stopped', 'success');
+      // Optimistic UI update to reduce status flicker
+      const row = document.querySelector(`#tasks tbody tr[data-id="${taskId}"]`);
+      if (row) {
+        const statusCell = row.children[2];
+        if (statusCell) statusCell.innerHTML = badge('stopped');
+        // Disable action buttons briefly to avoid rapid re-clicks
+        const buttons = row.querySelectorAll('.task-actions button');
+        buttons.forEach(b => b.disabled = true);
+        setTimeout(() => buttons.forEach(b => b.disabled = false), 600);
+      }
+      loadTasks();
+    } else {
+      showToast('Failed to stop task', 'error');
+    }
+  } catch (error) {
+    showToast('Error stopping task: ' + error.message, 'error');
+  }
+}
+
+async function deleteTask(taskId) {
+  if (!confirm('Are you sure you want to delete this task? This will also delete any saved state.')) {
+    return;
+  }
+  
+  try {
+    const res = await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
+    if (res.ok) {
+      showToast('Task deleted', 'success');
+      loadTasks();
+    } else {
+      showToast('Failed to delete task', 'error');
+    }
+  } catch (error) {
+    showToast('Error deleting task: ' + error.message, 'error');
+  }
+}
+
 document.addEventListener('DOMContentLoaded', function() {
   const fileInput = document.getElementById('uploadFile');
   const uploadPlaceholder = document.getElementById('uploadPlaceholder');
   const uploadControls = document.getElementById('uploadControls');
   const uploadFilename = document.getElementById('uploadFilename');
   
-  // global upload state
   if (!window.uploadState) {
     window.uploadState = {
       isFileUploaded: false,
@@ -395,14 +522,12 @@ document.addEventListener('DOMContentLoaded', function() {
     };
   }
   
-  // auto-upload when file is selected
   if (fileInput) {
     fileInput.addEventListener('change', async function() {
       if (this.files.length === 0) return;
       
       const file = this.files[0];
       
-      // validate file
       if (file.size > 10 * 1024 * 1024) {
         showToast('File too large (max 10MB)', 'error');
         this.value = '';
@@ -416,14 +541,12 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
       }
       
-      // show uploading state
       if (uploadPlaceholder) uploadPlaceholder.style.display = 'none';
       if (uploadControls) uploadControls.style.display = 'flex';
       if (uploadFilename) {
         uploadFilename.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Uploading ${file.name}...`;
       }
       
-      // reset state
       window.uploadState.isFileUploaded = false;
       window.uploadState.uploadedFilePath = '';
       const wordlistInput = document.getElementById('wordlist');
@@ -447,7 +570,6 @@ document.addEventListener('DOMContentLoaded', function() {
         
         const data = await res.json();
         
-        // update state and form
         window.uploadState.isFileUploaded = true;
         window.uploadState.uploadedFilePath = data.path;
         
@@ -459,14 +581,12 @@ document.addEventListener('DOMContentLoaded', function() {
         const useDefaultInput = document.getElementById('useDefault');
         if (useDefaultInput) useDefaultInput.value = 'false';
         
-        // ensure upload radio is selected
         const uploadRadio = document.querySelector('input[name="wordlist_source"][value="upload"]');
         if (uploadRadio) {
           uploadRadio.checked = true;
           uploadRadio.dispatchEvent(new Event('change'));
         }
         
-        // show success
         if (uploadFilename) {
           uploadFilename.innerHTML = `<i class="fas fa-check-circle" style="color: var(--success-color);"></i> ${file.name} uploaded`;
         }
@@ -487,14 +607,6 @@ document.addEventListener('DOMContentLoaded', function() {
     if (uploadPlaceholder) uploadPlaceholder.style.display = 'block';
     if (uploadControls) uploadControls.style.display = 'none';
     if (fileInput) fileInput.value = '';
-  }
-  
-  function formatFileSize(bytes) {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   }
 });
 
@@ -616,38 +728,6 @@ async function loadTasks(){
   }
 }
 
-async function stopTask(taskId) {
-  try {
-    const res = await fetch(`/api/tasks/${taskId}/stop`, { method: 'POST' });
-    if (res.ok) {
-      showToast('Task stopped', 'success');
-      loadTasks();
-    } else {
-      showToast('Failed to stop task', 'error');
-    }
-  } catch (error) {
-    showToast('Error stopping task: ' + error.message, 'error');
-  }
-}
-
-async function deleteTask(taskId) {
-  if (!confirm('Are you sure you want to delete this task?')) {
-    return;
-  }
-  
-  try {
-    const res = await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
-    if (res.ok) {
-      showToast('Task deleted', 'success');
-      loadTasks();
-    } else {
-      showToast('Failed to delete task', 'error');
-    }
-  } catch (error) {
-    showToast('Error deleting task: ' + error.message, 'error');
-  }
-}
-
 document.addEventListener('DOMContentLoaded', function() {
   const taskForm = document.getElementById('taskForm');
   if (taskForm) {
@@ -662,13 +742,49 @@ document.addEventListener('DOMContentLoaded', function() {
   if (goroutinesEl) goroutinesEl.textContent = 'Loading...';
   if (memoryEl) memoryEl.textContent = 'Loading...';
   
+  // Check for saved tasks on load
+  loadTasks().then(() => {
+    const tasks = document.querySelectorAll('#tasks tbody tr');
+    if (tasks.length > 0) {
+      let hasPausedTasks = false;
+      tasks.forEach(tr => {
+        const statusBadge = tr.querySelector('.badge');
+        if (statusBadge && statusBadge.textContent.toLowerCase() === 'paused') {
+          hasPausedTasks = true;
+        }
+      });
+      
+      if (hasPausedTasks) {
+        showToast('Found paused tasks from previous session. Click play to resume.', 'info');
+      }
+    }
+  });
+  
   Promise.all([
     loadTasks().catch(err => console.error('Initial tasks load failed:', err)),
     loadStats().catch(err => console.error('Initial stats load failed:', err))
   ]).then(() => {
-    setInterval(() => {
-      loadTasks().catch(err => console.error('Periodic tasks load failed:', err));
-    }, 2500);
+    // Prefer SSE stream for tasks when available
+    try {
+      const es = new EventSource('/api/tasks/stream');
+      es.addEventListener('tasks', ev => {
+        try {
+          const data = JSON.parse(ev.data);
+          if (window.renderTasks) window.renderTasks(data);
+        } catch(e){}
+      });
+      es.onerror = () => {
+        // Fallback to polling if SSE fails
+        es.close();
+        setInterval(() => {
+          loadTasks().catch(err => console.error('Periodic tasks load failed:', err));
+        }, 2500);
+      };
+    } catch (e) {
+      setInterval(() => {
+        loadTasks().catch(err => console.error('Periodic tasks load failed:', err));
+      }, 2500);
+    }
     
     setInterval(() => {
       loadStats().catch(err => console.error('Periodic stats load failed:', err));
@@ -676,6 +792,9 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 });
 
+// Export functions to global scope
+window.pauseTask = pauseTask;
+window.resumeTask = resumeTask;
 window.stopTask = stopTask;
 window.deleteTask = deleteTask;
 window.showToast = showToast;

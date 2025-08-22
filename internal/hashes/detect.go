@@ -5,13 +5,10 @@ import (
     "strings"
 )
 
-// so detect.go returns a ranked list of candidate algorithms for the provided target hash string.
-// it uses simple heuristics and Validate() to build candidates in a stable order.
 func Detect(target string) []string {
     t := strings.TrimSpace(target)
     if t == "" { return nil }
 
-    // my preferred order keeps results stable and reasonably accurate for common hashes, can be improved but i won't bother
     order := []string{
         "ntlm", "md5", "lm",
         "sha1", "ripemd160",
@@ -28,7 +25,6 @@ func Detect(target string) []string {
     lower := strings.ToLower(t)
     switch {
     case strings.HasPrefix(lower, "*$"):
-        // some tools export MySQL with * prefix and lowercase; still treat as mysql
         add("mysql")
     case strings.HasPrefix(lower, "*"):
         add("mysql")
@@ -44,13 +40,12 @@ func Detect(target string) []string {
         if ok { matches = append(matches, name) }
     }
 
-    for name := range idx { // already added by heuristic
+    for name := range idx {
         found := false
         for _, m := range matches { if m == name { found = true; break } }
         if !found { matches = append([]string{name}, matches...) }
     }
 
-    // Final pass: stable order by the specified order slice; unknowns at end alphabetically
     rank := map[string]int{}
     for i, n := range order { rank[n] = i }
     sort.SliceStable(matches, func(i, j int) bool {
