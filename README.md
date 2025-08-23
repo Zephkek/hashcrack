@@ -43,61 +43,6 @@ HashCrack is a Go‑based, CPU hash‑cracking toolkit with a Web UI and a simpl
 
 ## Supported algorithms
 
-### Core digests
-
-| Algorithm | Notes |
-|---|---|
-| `md5` | Lower/upper hex compare supported |
-| `sha1` | Standard 160-bit digest |
-| `sha256` / `sha384` / `sha512` | SHA-2 family |
-| `sha3-224` / `sha3-256` / `sha3-384` / `sha3-512` | SHA-3 family |
-| `shake128` (256-bit out) / `shake256` (512-bit out) | Extendable-output functions |
-
-### Other digests
-
-| Algorithm | Notes |
-|---|---|
-| `ripemd160` | RIPEMD-160 |
-
-### Windows / legacy
-
-| Algorithm | Notes |
-|---|---|
-| `ntlm` | NTLM (UTF-16LE → MD4) |
-| `lm` | DES-based legacy; UPPERCASE hex |
-
-### Infra / network
-
-| Algorithm | Notes |
-|---|---|
-| `mysql` (4.1+) | `*` + upper hex of SHA1(SHA1(password)) |
-| `cisco7` | Reversible “type 7” (decode + compare) |
-
-### LDAP
-
-| Algorithm | Notes |
-|---|---|
-| `ldap_md5` | `{MD5}` + base64 of MD5 |
-| `ldap_sha1` | `{SHA}` + base64 of SHA-1 |
-
-### Key derivation functions (KDFs)
-
-| Algorithm | Input format / Notes |
-|---|---|
-| `bcrypt` | Hashes start with `$2a$`, `$2b$`, or `$2y$`; cost param supported |
-| `scrypt` | `scrypt:<saltHex>:<keyHex>` |
-| `argon2id` | `argon2id:<saltHex>:<keyHex>` (time/memory/parallelism supported) |
-| `pbkdf2-sha1` / `pbkdf2-sha256` / `pbkdf2-sha512` | `pbkdf2-<algo>:<saltHex>:<iter>:<keyHex>` |
-
-<details>
-<summary>Detection hints</summary>
-
-- MySQL: `*` followed by 40 uppercase hex
-- LDAP MD5/SHA1: `{MD5}` / `{SHA}` followed by base64
-- Cisco7: two digits followed by hex pairs
-- bcrypt: starts with `$2a$`, `$2b$`, or `$2y$` and a two-digit cost
-</details>
-
 <details>
 <summary>Full supported algorithms</summary>
 
