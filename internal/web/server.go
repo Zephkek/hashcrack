@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -29,6 +30,7 @@ type Task struct {
 	Algo      string            `json:"algo"`
 	Target    string            `json:"target"`
 	Wordlist  string            `json:"wordlist"`
+	WordlistURL string           `json:"wordlist_url,omitempty"`
 	UseDefaultWordlist bool     `json:"use_default_wordlist"`
 	Rules     []string          `json:"rules"`
 	Mask      string            `json:"mask"`
@@ -38,7 +40,25 @@ type Task struct {
 	BFMin     int               `json:"bf_min"`
 	BFMax     int               `json:"bf_max"`
 	BFChars         string            `json:"bf_chars"`
-	BcryptCost      int               `json:"bcrypt_cost"`
+	
+	// Hybrid attack fields
+	HybridMode        string            `json:"hybrid_mode,omitempty"`
+	HybridWordlistURL string            `json:"hybrid_wordlist_url,omitempty"`
+	
+	// Association attack fields  
+	Username          string            `json:"username,omitempty"`
+	Email             string            `json:"email,omitempty"`
+	Company           string            `json:"company,omitempty"`
+	Filename          string            `json:"filename,omitempty"`
+	
+	// Combination attack fields
+	Wordlist1         string            `json:"wordlist1,omitempty"`
+	Wordlist2         string            `json:"wordlist2,omitempty"`
+	Wordlist1URL      string            `json:"comb_wordlist1_url,omitempty"`
+	Wordlist2URL      string            `json:"comb_wordlist2_url,omitempty"`
+	Separator         string            `json:"separator,omitempty"`
+	
+	BcryptCost        int               `json:"bcrypt_cost"`
 	ScryptN         int               `json:"scrypt_n"`
 	ScryptR         int               `json:"scrypt_r"`
 	ScryptP         int               `json:"scrypt_p"`
@@ -53,6 +73,8 @@ type Task struct {
 	StartedAt *time.Time        `json:"started_at,omitempty"`
 	Detected  []string          `json:"detected,omitempty"`
 	Progress  *TaskProgress     `json:"progress,omitempty"`
+	// Download reflects real-time remote wordlist download state
+	Download  *DownloadStatus    `json:"download,omitempty"`
 	
 	IsPaused         bool          `json:"is_paused"`
 	LastCheckpoint   time.Time     `json:"last_checkpoint,omitempty"`
@@ -63,6 +85,20 @@ type Task struct {
 	TotalRuntime     time.Duration `json:"total_runtime,omitempty"`
 	
 	progressMu sync.RWMutex     `json:"-"`
+}
+
+// DownloadStatus captures real-time progress while fetching remote wordlists
+type DownloadStatus struct {
+	Active           bool      `json:"active"`
+	URL              string    `json:"url,omitempty"`
+	BytesDownloaded  int64     `json:"bytes_downloaded"`
+	TotalBytes       int64     `json:"total_bytes,omitempty"`
+	Percent          float64   `json:"percent,omitempty"`
+	SpeedBps         float64   `json:"speed_bps,omitempty"`
+	ETASeconds       float64   `json:"eta_seconds,omitempty"`
+	StartedAt        time.Time `json:"started_at,omitempty"`
+	LastUpdated      time.Time `json:"last_updated,omitempty"`
+	Message          string    `json:"message,omitempty"`
 }
 
 type TaskProgress struct {
@@ -620,6 +656,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			Algo string `json:"algo"`
 			Target string `json:"target"`
 			Wordlist string `json:"wordlist"`
+			WordlistURL string `json:"wordlist_url"`
 			UseDefaultWordlist bool `json:"use_default_wordlist"`
 			Rules []string `json:"rules"`
 			Mask string `json:"mask"`
@@ -629,6 +666,24 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			BFMin int `json:"bf_min"`
 			BFMax int `json:"bf_max"`
 			BFChars string `json:"bf_chars"`
+			
+			// Hybrid attack fields
+			HybridMode string `json:"hybrid_mode"`
+			HybridWordlistURL string `json:"hybrid_wordlist_url"`
+			
+			// Association attack fields
+			Username string `json:"username"`
+			Email string `json:"email"`
+			Company string `json:"company"`
+			Filename string `json:"filename"`
+			
+			// Combination attack fields
+			Wordlist1 string `json:"wordlist1"`
+			Wordlist2 string `json:"wordlist2"`
+			Wordlist1URL string `json:"wordlist1_url"`
+			Wordlist2URL string `json:"wordlist2_url"`
+			Separator string `json:"separator"`
+			
 			BcryptCost int `json:"bcrypt_cost"`
 			ScryptN int `json:"scrypt_n"`
 			ScryptR int `json:"scrypt_r"`
@@ -687,6 +742,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			Algo: algo,
 			Target: req.Target,
 			Wordlist: req.Wordlist,
+			WordlistURL: req.WordlistURL,
 			UseDefaultWordlist: req.UseDefaultWordlist,
 			Rules: req.Rules,
 			Mask: req.Mask,
@@ -696,6 +752,24 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			BFMin: req.BFMin,
 			BFMax: req.BFMax,
 			BFChars: req.BFChars,
+			
+			// Hybrid attack fields
+			HybridMode: req.HybridMode,
+			HybridWordlistURL: req.HybridWordlistURL,
+			
+			// Association attack fields
+			Username: req.Username,
+			Email: req.Email,
+			Company: req.Company,
+			Filename: req.Filename,
+			
+			// Combination attack fields
+			Wordlist1: req.Wordlist1,
+			Wordlist2: req.Wordlist2,
+			Wordlist1URL: req.Wordlist1URL,
+			Wordlist2URL: req.Wordlist2URL,
+			Separator: req.Separator,
+			
 			BcryptCost: req.BcryptCost,
 			ScryptN: req.ScryptN,
 			ScryptR: req.ScryptR,
@@ -1351,6 +1425,228 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 			}
 		}
 		
+	} else if mode == "hybrid" {
+		// Hybrid attack: wordlist + mask or mask + wordlist
+		var wl string
+		
+		// Debug logging
+		log.Printf("Hybrid attack - UseDefaultWordlist: %v, WordlistURL: '%s', Wordlist: '%s', HybridWordlistURL: '%s'", 
+			t.UseDefaultWordlist, t.WordlistURL, t.Wordlist, t.HybridWordlistURL)
+		
+		// Handle wordlist source
+		if strings.TrimSpace(t.HybridWordlistURL) != "" {
+			log.Printf("Using hybrid URL wordlist: %s", t.HybridWordlistURL)
+			tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.HybridWordlistURL))
+			if err != nil {
+				t.Status = "error"
+				eventMu.Lock()
+				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Failed to download hybrid wordlist from URL: %v", err)})
+				eventMu.Unlock()
+				return
+			}
+			wl = tempFile
+			// resume running state after download
+			t.Status = "running"
+			defer func() {
+				if err := os.Remove(tempFile); err != nil {
+					log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
+				}
+			}()
+		} else if t.UseDefaultWordlist {
+			wl = "testdata/rockyou-mini.txt"
+			log.Printf("Using default wordlist: %s", wl)
+			if _, err := os.Stat(wl); os.IsNotExist(err) {
+				t.Status = "error"
+				eventMu.Lock()
+				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Default wordlist not found: %s", wl)})
+				eventMu.Unlock()
+				return
+			}
+		} else if strings.TrimSpace(t.WordlistURL) != "" {
+			log.Printf("Using URL wordlist: %s", t.WordlistURL)
+			tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.WordlistURL))
+			if err != nil {
+				t.Status = "error"
+				eventMu.Lock()
+				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Failed to download wordlist from URL: %v", err)})
+				eventMu.Unlock()
+				return
+			}
+			wl = tempFile
+			// resume running state after download
+			t.Status = "running"
+			defer func() {
+				if err := os.Remove(tempFile); err != nil {
+					log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
+				}
+			}()
+		} else {
+			wl = strings.TrimSpace(t.Wordlist)
+			log.Printf("Using uploaded wordlist: %s", wl)
+			if wl == "" {
+				t.Status = "error"
+				eventMu.Lock()
+				t.Events = append(t.Events, map[string]any{"error": "Hybrid attack requires a wordlist"})
+				eventMu.Unlock()
+				return
+			}
+			
+			if strings.HasPrefix(wl, "/uploads/") {
+				wl = strings.TrimPrefix(wl, "/")
+			} else if !strings.Contains(wl, "/") && !strings.Contains(wl, "\\") {
+				wl = filepath.Join("uploads", wl)
+			}
+			
+			log.Printf("Final wordlist path: %s", wl)
+			if _, err := os.Stat(wl); os.IsNotExist(err) {
+				t.Status = "error"
+				eventMu.Lock()
+				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Wordlist file not found: %s", wl)})
+				eventMu.Unlock()
+				return
+			}
+		}
+		
+		if t.Mask == "" {
+			t.Status = "error"
+			eventMu.Lock()
+			t.Events = append(t.Events, map[string]any{"error": "Hybrid attack requires a mask pattern"})
+			eventMu.Unlock()
+			return
+		}
+		
+		// Use the proper hybrid attack function
+		hybridOpts := cracker.HybridOptions{
+			Wordlist: wl,
+			Mask:     t.Mask,
+			IsPrefix: t.HybridMode == "mask-wordlist", // true if mask comes first
+		}
+		
+		res, err = c.CrackHybrid(ctx, h, params, t.Target, hybridOpts)
+		
+	} else if mode == "combination" {
+		// Combination attack: combine two wordlists
+		var wl1, wl2 string
+		
+		// Debug logging
+		log.Printf("Combination attack - Wordlist1: '%s', Wordlist2: '%s', Wordlist1URL: '%s', Wordlist2URL: '%s'", 
+			t.Wordlist1, t.Wordlist2, t.Wordlist1URL, t.Wordlist2URL)
+		
+		// Handle first wordlist
+		if strings.TrimSpace(t.Wordlist1URL) != "" {
+			log.Printf("Using URL for first wordlist: %s", t.Wordlist1URL)
+			tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.Wordlist1URL))
+			if err != nil {
+				t.Status = "error"
+				eventMu.Lock()
+				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Failed to download first wordlist from URL: %v", err)})
+				eventMu.Unlock()
+				return
+			}
+			wl1 = tempFile
+			// keep status as downloading until both resolve; set back to running here for simplicity
+			t.Status = "running"
+			defer func() {
+				if err := os.Remove(tempFile); err != nil {
+					log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
+				}
+			}()
+		} else if t.Wordlist1 != "" {
+			wl1 = strings.TrimSpace(t.Wordlist1)
+			if strings.HasPrefix(wl1, "/uploads/") {
+				wl1 = strings.TrimPrefix(wl1, "/")
+			} else if !strings.Contains(wl1, "/") && !strings.Contains(wl1, "\\") {
+				wl1 = filepath.Join("uploads", wl1)
+			}
+		} else {
+			wl1 = "testdata/rockyou-mini.txt" // default
+		}
+		
+		// Handle second wordlist
+		if strings.TrimSpace(t.Wordlist2URL) != "" {
+			log.Printf("Using URL for second wordlist: %s", t.Wordlist2URL)
+			tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.Wordlist2URL))
+			if err != nil {
+				t.Status = "error"
+				eventMu.Lock()
+				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Failed to download second wordlist from URL: %v", err)})
+				eventMu.Unlock()
+				return
+			}
+			wl2 = tempFile
+			// resume running state after download
+			t.Status = "running"
+			defer func() {
+				if err := os.Remove(tempFile); err != nil {
+					log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
+				}
+			}()
+		} else if t.Wordlist2 != "" {
+			wl2 = strings.TrimSpace(t.Wordlist2)
+			if strings.HasPrefix(wl2, "/uploads/") {
+				wl2 = strings.TrimPrefix(wl2, "/")
+			} else if !strings.Contains(wl2, "/") && !strings.Contains(wl2, "\\") {
+				wl2 = filepath.Join("uploads", wl2)
+			}
+		} else {
+			wl2 = "testdata/rockyou-mini.txt" // default
+		}
+		
+		log.Printf("Final wordlist paths - wl1: %s, wl2: %s", wl1, wl2)
+		
+		// Check if both wordlists exist
+		if _, err := os.Stat(wl1); os.IsNotExist(err) {
+			t.Status = "error"
+			eventMu.Lock()
+			t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("First wordlist file not found: %s", wl1)})
+			eventMu.Unlock()
+			return
+		}
+		if _, err := os.Stat(wl2); os.IsNotExist(err) {
+			t.Status = "error"
+			eventMu.Lock()
+			t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Second wordlist file not found: %s", wl2)})
+			eventMu.Unlock()
+			return
+		}
+		
+		// Use the proper combination attack function
+		combOpts := cracker.CombinationOptions{
+			Wordlist1: wl1,
+			Wordlist2: wl2,
+			Separator: t.Separator,
+		}
+		
+		res, err = c.CrackCombination(ctx, h, params, t.Target, combOpts)
+		
+	} else if mode == "association" {
+		// Association attack: generate candidates based on context clues
+		if t.Username == "" && t.Email == "" && t.Company == "" && t.Filename == "" {
+			t.Status = "error"
+			eventMu.Lock()
+			t.Events = append(t.Events, map[string]any{"error": "Association attack requires at least one context field (username, email, company, or filename)"})
+			eventMu.Unlock()
+			return
+		}
+		
+		// Build hint string from available context
+		hint := ""
+		if t.Email != "" {
+			hint = t.Email
+		} else if t.Company != "" {
+			hint = t.Company
+		}
+		
+		// Use the proper association attack function
+		assocOpts := cracker.AssociationOptions{
+			Username: t.Username,
+			Hint:     hint,
+			Filename: t.Filename,
+			BaseInfo: t.Company, // Use company as base info if available
+		}
+		
+		res, err = c.CrackAssociation(ctx, h, params, t.Target, assocOpts)
+		
 	} else {
 		// Wordlist mode with resume support
 		var wl string
@@ -1373,12 +1669,33 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 				eventMu.Unlock()
 				return
 			}
+		} else if strings.TrimSpace(t.WordlistURL) != "" {
+			// Handle URL wordlist download
+			tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.WordlistURL))
+			if err != nil {
+				t.Status = "error"
+				eventMu.Lock()
+				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Failed to download wordlist from URL: %v", err)})
+				eventMu.Unlock()
+				return
+			}
+			
+			wl = tempFile
+			// resume running state after download
+			t.Status = "running"
+			
+			// Clean up temp file when done
+			defer func() {
+				if err := os.Remove(tempFile); err != nil {
+					log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
+				}
+			}()
 		} else {
 			wl = strings.TrimSpace(t.Wordlist)
 			if wl == "" {
 				t.Status = "error"
 				eventMu.Lock()
-				t.Events = append(t.Events, map[string]any{"error": "Custom wordlist required. Please upload a wordlist file or select the default wordlist option."})
+				t.Events = append(t.Events, map[string]any{"error": "Custom wordlist required. Please upload a wordlist file, provide a URL, or select the default wordlist option."})
 				eventMu.Unlock()
 				return
 			}
@@ -1541,4 +1858,207 @@ func buildTransform(rules []string) func(string) []string {
 		}
 		return out
 	}
+}
+
+// downloadWordlistFromURL downloads a wordlist from a URL and saves it to a temporary file
+func downloadWordlistFromURL(url string) (string, error) {
+	// Validate URL
+	if !isValidURL(url) {
+		return "", fmt.Errorf("invalid URL format")
+	}
+	
+	// Create HTTP client with timeout and reasonable limits
+	client := &http.Client{
+		Timeout: 10 * time.Minute, // 10 minute timeout for large downloads
+	}
+	
+	// Send GET request
+	resp, err := client.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch URL: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	// Check response status
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP error: %d %s", resp.StatusCode, resp.Status)
+	}
+	
+	// Check content type (optional validation)
+	contentType := resp.Header.Get("Content-Type")
+	if contentType != "" && !isTextContentType(contentType) {
+		log.Printf("Warning: Content-Type '%s' doesn't appear to be text, but proceeding anyway", contentType)
+	}
+	
+	// Create temporary file
+	tempFile, err := os.CreateTemp("", "wordlist_*.txt")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temporary file: %w", err)
+	}
+	defer tempFile.Close()
+	
+	// Copy content with size limit (200MB max to accommodate larger wordlists like RockYou)
+	const maxSize = 200 * 1024 * 1024 // 200MB
+	limitedReader := &io.LimitedReader{R: resp.Body, N: maxSize}
+	
+	log.Printf("Starting download from %s...", url)
+	written, err := io.Copy(tempFile, limitedReader)
+	if err != nil {
+		os.Remove(tempFile.Name()) // Clean up on error
+		return "", fmt.Errorf("failed to download file: %w", err)
+	}
+	
+	// Check if we hit the size limit
+	if limitedReader.N == 0 {
+		os.Remove(tempFile.Name()) // Clean up
+		return "", fmt.Errorf("wordlist file too large (>200MB)")
+	}
+	
+	log.Printf("Downloaded wordlist from %s (%d bytes) to %s", url, written, tempFile.Name())
+	
+	// Validate the downloaded file
+	if err := validateWordlistFile(tempFile.Name()); err != nil {
+		os.Remove(tempFile.Name()) // Clean up
+		return "", fmt.Errorf("downloaded file validation failed: %w", err)
+	}
+	
+	return tempFile.Name(), nil
+}
+
+// downloadWordlistFromURLWithProgress is like downloadWordlistFromURL but reports progress into the task
+func downloadWordlistFromURLWithProgress(ctx context.Context, t *Task, urlStr string) (string, error) {
+	if !isValidURL(urlStr) {
+		return "", fmt.Errorf("invalid URL format")
+	}
+
+	client := &http.Client{ Timeout: 10 * time.Minute }
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
+	if err != nil { return "", fmt.Errorf("failed to build request: %w", err) }
+
+	resp, err := client.Do(req)
+	if err != nil { return "", fmt.Errorf("failed to fetch URL: %w", err) }
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK { return "", fmt.Errorf("HTTP error: %d %s", resp.StatusCode, resp.Status) }
+
+	// Prepare download status
+	t.progressMu.Lock()
+	t.Status = "downloading"
+	t.Download = &DownloadStatus{
+		Active:          true,
+		URL:             urlStr,
+		BytesDownloaded: 0,
+		TotalBytes:      -1,
+		StartedAt:       time.Now(),
+		LastUpdated:     time.Now(),
+		Message:         "Starting download...",
+	}
+	if cl := resp.Header.Get("Content-Length"); cl != "" {
+		if n, err := strconv.ParseInt(cl, 10, 64); err == nil { t.Download.TotalBytes = n }
+	}
+	t.progressMu.Unlock()
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType != "" && !isTextContentType(contentType) {
+		log.Printf("Warning: Content-Type '%s' doesn't appear to be text, but proceeding anyway", contentType)
+	}
+
+	tempFile, err := os.CreateTemp("", "wordlist_*.txt")
+	if err != nil { return "", fmt.Errorf("failed to create temporary file: %w", err) }
+	defer tempFile.Close()
+
+	const maxSize = 200 * 1024 * 1024 // 200MB
+	limitedReader := &io.LimitedReader{ R: resp.Body, N: maxSize }
+
+	// Wrap reader to count bytes and periodically update status
+	buf := make([]byte, 64*1024)
+	var written int64
+	lastTick := time.Now()
+	for {
+		if err := ctx.Err(); err != nil {
+			os.Remove(tempFile.Name())
+			return "", fmt.Errorf("download cancelled")
+		}
+		n, rerr := limitedReader.Read(buf)
+		if n > 0 {
+			wn, werr := tempFile.Write(buf[:n])
+			if werr != nil { os.Remove(tempFile.Name()); return "", fmt.Errorf("write error: %w", werr) }
+			written += int64(wn)
+			now := time.Now()
+			if now.Sub(lastTick) >= 500*time.Millisecond || rerr == io.EOF {
+				t.progressMu.Lock()
+				if t.Download == nil { t.Download = &DownloadStatus{} }
+				t.Download.Active = true
+				t.Download.URL = urlStr
+				t.Download.BytesDownloaded = written
+				// Compute percent, speed, ETA
+				total := t.Download.TotalBytes
+				if total > 0 {
+					t.Download.Percent = float64(written) * 100 / float64(total)
+				} else {
+					t.Download.Percent = 0
+				}
+				elapsed := now.Sub(t.Download.StartedAt).Seconds()
+				if elapsed > 0 {
+					t.Download.SpeedBps = float64(written) / elapsed
+					if total > 0 && written < total && t.Download.SpeedBps > 0 {
+						remain := float64(total-written) / t.Download.SpeedBps
+						// cap ETA to 1 day to avoid huge values
+						if remain > 86400 { remain = 86400 }
+						t.Download.ETASeconds = remain
+					} else {
+						t.Download.ETASeconds = 0
+					}
+				}
+				t.Download.LastUpdated = now
+				t.progressMu.Unlock()
+				lastTick = now
+			}
+		}
+		if rerr != nil {
+			if rerr == io.EOF { break }
+			os.Remove(tempFile.Name())
+			return "", fmt.Errorf("failed to download file: %w", rerr)
+		}
+		if limitedReader.N == 0 {
+			os.Remove(tempFile.Name())
+			return "", fmt.Errorf("wordlist file too large (>200MB)")
+		}
+	}
+
+	log.Printf("Downloaded wordlist from %s (%d bytes) to %s", urlStr, written, tempFile.Name())
+	if err := validateWordlistFile(tempFile.Name()); err != nil {
+		os.Remove(tempFile.Name())
+		return "", fmt.Errorf("downloaded file validation failed: %w", err)
+	}
+
+	// Finalize download state
+	t.progressMu.Lock()
+	if t.Download != nil {
+		t.Download.Active = false
+		t.Download.BytesDownloaded = written
+		if t.Download.TotalBytes > 0 {
+			t.Download.Percent = float64(written) * 100 / float64(t.Download.TotalBytes)
+		} else {
+			t.Download.Percent = 100
+		}
+		t.Download.ETASeconds = 0
+		t.Download.LastUpdated = time.Now()
+		t.Download.Message = "Download complete"
+	}
+	t.progressMu.Unlock()
+
+	return tempFile.Name(), nil
+}
+
+// isValidURL checks if a string is a valid HTTP/HTTPS URL
+func isValidURL(str string) bool {
+	u, err := url.Parse(str)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
+// isTextContentType checks if the content type appears to be text-based
+func isTextContentType(contentType string) bool {
+	return strings.HasPrefix(contentType, "text/") ||
+		strings.Contains(contentType, "application/text") ||
+		strings.Contains(contentType, "charset=")
 }

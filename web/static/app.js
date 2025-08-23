@@ -1,14 +1,15 @@
 function badge(status){
-  const m = { 
+  const m = {
     found: 'badge badge-found', 
     running: 'badge badge-run', 
+  downloading: 'badge badge-downloading',
     done: 'badge badge-done', 
     queued: 'badge badge-queued', 
     error: 'badge badge-error',
     paused: 'badge badge-paused',
     stopped: 'badge badge-stopped'
   };
-  return `<span class="${m[status]||'badge'}">${status}</span>`;
+  return `<span class="${m[status]||'badge'}" title="${status}">${status}</span>`;
 }
 
 window.renderTasks = function(tasks){
@@ -30,7 +31,38 @@ window.renderTasks = function(tasks){
     const result = t.result?.plaintext ? `<strong style="color: var(--success-color);">${escapeHtml(t.result.plaintext)}</strong>` : '';
     
     let progress = '';
-    if (t.status === 'running' && t.progress) {
+    if (t.status === 'downloading' && t.download && t.download.active) {
+      const d = t.download;
+      const percentNum = Math.max(0, Math.min(100, d.percent || (d.total_bytes > 0 ? (d.bytes_downloaded / d.total_bytes * 100) : 0)));
+      const percentTxt = `${percentNum.toFixed(1)}%`;
+      const sizeOverlay = d.total_bytes > 0
+        ? `${formatBytes(d.bytes_downloaded)} / ${formatBytes(d.total_bytes)}`
+        : `${formatBytes(d.bytes_downloaded)}`;
+      const speedText = d.speed_bps ? `${formatBytes(d.speed_bps)}/s` : '';
+      const eta = d.eta_seconds ? formatDuration(d.eta_seconds) : '';
+      progress = `<div class="progress-info enhanced downloading">
+        <div class="progress-main">
+          <div class="progress-title" style="font-size:0.8rem;color:var(--text-secondary);display:flex;align-items:center;gap:6px;">
+            <i class="fas fa-download" style="color:var(--primary-color);"></i>
+            <span>Downloading</span>
+          </div>
+          <div class="progress-bar-container">
+            <div class="progress-bar" style="width: ${percentNum}%"></div>
+            <span class="progress-text">${sizeOverlay}</span>
+          </div>
+          <div class="progress-metrics">
+            <span class="metric"><i class="fas fa-percentage"></i> ${percentTxt}</span>
+            ${speedText ? `<span class="metric"><i class="fas fa-tachometer-alt"></i> ${speedText}</span>` : ''}
+            ${eta ? `<span class="metric"><i class="fas fa-clock"></i> ${eta}</span>` : ''}
+          </div>
+        </div>
+        <div class="progress-details">
+            <div class="current-candidate" title="${escapeHtml(d.url||'')}" style="max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+              <i class="fas fa-link"></i> <a href="${escapeHtml(d.url||'')}" target="_blank" rel="noopener" style="color:var(--text-secondary);text-decoration:none;">${escapeHtml((d.url||'').replace(/^https?:\/\//,''))}</a>
+          </div>
+        </div>
+      </div>`;
+    } else if (t.status === 'running' && t.progress) {
       const p = t.progress;
       const speed = p.attempts_per_second ? formatSpeed(p.attempts_per_second) : '';
       const eta = p.eta_seconds ? formatDuration(p.eta_seconds) : '';
@@ -164,9 +196,22 @@ function getModeInfo(task) {
       return `<small class="mode-badge mode-mask"><i class="fas fa-mask"></i> Mask: ${task.mask || '?'}</small>`;
     case 'bruteforce':
       return `<small class="mode-badge mode-bruteforce"><i class="fas fa-bolt"></i> Brute ${task.bf_min}-${task.bf_max} chars</small>`;
+    case 'hybrid':
+  const hybridSource = (task.hybrid_wordlist_url || task.wordlist_url) ? 'URL' : (task.wordlist ? 'custom' : 'default');
+      const hybridMode = task.hybrid_mode || 'wordlist-mask';
+      return `<small class="mode-badge mode-hybrid"><i class="fas fa-puzzle-piece"></i> Hybrid (${hybridSource}, ${hybridMode})</small>`;
+    case 'combination':
+  const wl1Url = task.comb_wordlist1_url || task.wordlist1_url;
+  const wl2Url = task.comb_wordlist2_url || task.wordlist2_url;
+  const wl1 = wl1Url ? 'URL' : (task.wordlist1 ? 'custom' : 'default');
+  const wl2 = wl2Url ? 'URL' : (task.wordlist2 ? 'custom' : 'default');
+      return `<small class="mode-badge mode-combination"><i class="fas fa-layer-group"></i> Combination (${wl1} + ${wl2})</small>`;
+    case 'association':
+      const contextFields = [task.username, task.email, task.company, task.filename].filter(f => f && f.trim()).length;
+      return `<small class="mode-badge mode-association"><i class="fas fa-link"></i> Association (${contextFields} context fields)</small>`;
     case 'wordlist':
     default:
-      const source = task.use_default_wordlist ? 'default' : (task.wordlist ? 'custom' : 'none');
+      const source = task.use_default_wordlist ? 'default' : (task.wordlist_url ? 'URL' : (task.wordlist ? 'custom' : 'none'));
       return `<small class="mode-badge mode-wordlist"><i class="fas fa-list"></i> Wordlist (${source})</small>`;
   }
 }
@@ -223,6 +268,15 @@ function formatDuration(seconds) {
   }
 }
 
+function formatBytes(bytes) {
+  if (!bytes || bytes < 0) return '0 B';
+  const units = ['B','KB','MB','GB','TB'];
+  let i = 0;
+  let n = Number(bytes);
+  while (n >= 1024 && i < units.length-1) { n /= 1024; i++; }
+  return `${n.toFixed(n < 10 && i>0 ? 1 : 0)} ${units[i]}`;
+}
+
 function escapeHtml(s){ 
   return String(s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); 
 }
@@ -249,10 +303,8 @@ function showToast(message, type = 'info') {
 
 function showStep(step) {
   document.querySelectorAll('.form-step').forEach(s => s.classList.remove('active'));
-  const targetStep = document.getElementById(`step${step}`);
-  if (targetStep) {
-    targetStep.classList.add('active');
-  }
+  const el = document.getElementById(`step${step}`);
+  if (el) el.classList.add('active');
 }
 
 async function createTask(evt){
@@ -369,7 +421,99 @@ function collectFormData(form) {
   const wordlistSource = document.querySelector('input[name="wordlist_source"]:checked')?.value;
   const wordlistInput = document.getElementById('wordlist');
   
-  if (wordlistSource === 'default') {
+  // Handle different attack modes
+  if (payload.mode === 'hybrid') {
+    // Handle hybrid wordlist source
+    const hybridSource = document.querySelector('input[name="hybrid_wordlist_source"]:checked')?.value;
+    
+    if (hybridSource === 'upload') {
+      if (payload.hybrid_wordlist && payload.hybrid_wordlist.trim() !== '') {
+        payload.use_default_wordlist = false;
+        payload.wordlist = payload.hybrid_wordlist; // Copy to main wordlist field
+      } else {
+        showToast('please upload a wordlist file for hybrid attack', 'error');
+        return null;
+      }
+    } else if (hybridSource === 'url') {
+      const hybridUrlInput = document.getElementById('hybridWordlistUrl');
+      const hybridUrl = hybridUrlInput ? hybridUrlInput.value.trim() : '';
+      
+      if (!hybridUrl) {
+        showToast('please enter a wordlist URL for hybrid attack', 'error');
+        return null;
+      }
+      
+      if (!isValidUrl(hybridUrl)) {
+        showToast('please enter a valid URL for hybrid wordlist', 'error');
+        return null;
+      }
+      
+      payload.hybrid_wordlist_url = hybridUrl;
+      payload.use_default_wordlist = false;
+      payload.wordlist = '';
+    } else {
+      // default
+      payload.use_default_wordlist = true;
+      payload.wordlist = '';
+    }
+  } else if (payload.mode === 'combination') {
+    // Handle combination attack wordlist sources
+    const wl1Source = document.querySelector('input[name="comb_wl1_source"]:checked')?.value;
+    const wl2Source = document.querySelector('input[name="comb_wl2_source"]:checked')?.value;
+    
+    // Handle first wordlist
+    if (wl1Source === 'upload') {
+      if (!payload.wordlist1 || payload.wordlist1.trim() === '') {
+        showToast('please upload the first wordlist file for combination attack', 'error');
+        return null;
+      }
+    } else if (wl1Source === 'url') {
+      const wl1UrlInput = document.getElementById('combWordlist1Url');
+      const wl1Url = wl1UrlInput ? wl1UrlInput.value.trim() : '';
+      
+      if (!wl1Url) {
+        showToast('please enter a URL for the first wordlist', 'error');
+        return null;
+      }
+      
+      if (!isValidUrl(wl1Url)) {
+        showToast('please enter a valid URL for the first wordlist', 'error');
+        return null;
+      }
+      
+  payload.wordlist1_url = wl1Url;
+      payload.wordlist1 = '';
+    }
+    
+    // Handle second wordlist
+    if (wl2Source === 'upload') {
+      if (!payload.wordlist2 || payload.wordlist2.trim() === '') {
+        showToast('please upload the second wordlist file for combination attack', 'error');
+        return null;
+      }
+    } else if (wl2Source === 'url') {
+      const wl2UrlInput = document.getElementById('combWordlist2Url');
+      const wl2Url = wl2UrlInput ? wl2UrlInput.value.trim() : '';
+      
+      if (!wl2Url) {
+        showToast('please enter a URL for the second wordlist', 'error');
+        return null;
+      }
+      
+      if (!isValidUrl(wl2Url)) {
+        showToast('please enter a valid URL for the second wordlist', 'error');
+        return null;
+      }
+      
+  payload.wordlist2_url = wl2Url;
+      payload.wordlist2 = '';
+    }
+    
+    payload.use_default_wordlist = false;
+  } else if (payload.mode === 'association') {
+    // For association attacks, always set to false since it generates its own candidates
+    payload.use_default_wordlist = false;
+  } else if (wordlistSource === 'default') {
     payload.use_default_wordlist = true;
     payload.wordlist = '';
   } else if (wordlistSource === 'upload') {
@@ -389,6 +533,24 @@ function collectFormData(form) {
     }
     
     payload.wordlist = wordlistPath;
+  } else if (wordlistSource === 'url') {
+    payload.use_default_wordlist = false;
+    
+    const urlInput = document.getElementById('wordlistUrl');
+    const wordlistUrl = urlInput ? urlInput.value.trim() : '';
+    
+    if (!wordlistUrl) {
+      showToast('please enter a wordlist URL', 'error');
+      return null;
+    }
+    
+    if (!isValidUrl(wordlistUrl)) {
+      showToast('please enter a valid URL', 'error');
+      return null;
+    }
+    
+    payload.wordlist_url = wordlistUrl;
+    payload.wordlist = ''; // Server will handle URL download
   } else if (payload.mode === 'wordlist') {
     payload.use_default_wordlist = true;
     payload.wordlist = '';
@@ -419,6 +581,11 @@ function collectFormData(form) {
     payload.mask = payload.hybrid_mask;
   }
   
+  // Map field names for new attack modes
+  if (payload.hybrid_mode) {
+    payload.hybrid_mode = payload.hybrid_mode.replace('_', '-'); // wordlist_mask -> wordlist-mask
+  }
+  
   return payload;
 }
 
@@ -437,20 +604,21 @@ function validatePayload(payload) {
   
   if (payload.mode === 'wordlist') {
     if (payload.use_default_wordlist) {
-      if (payload.wordlist && payload.wordlist.trim() !== '') {
-        showToast('choose either default wordlist or custom upload, not both', 'error');
+      if ((payload.wordlist && payload.wordlist.trim() !== '') || (payload.wordlist_url && payload.wordlist_url.trim() !== '')) {
+        showToast('choose either default wordlist or custom upload/URL, not both', 'error');
         showStep(2);
         return false;
       }
     } else {
       const hasWordlistPath = payload.wordlist && payload.wordlist.trim() !== '';
+      const hasWordlistUrl = payload.wordlist_url && payload.wordlist_url.trim() !== '';
       const hasUploadState = window.uploadState && window.uploadState.isFileUploaded;
       
-      if (!hasWordlistPath) {
+      if (!hasWordlistPath && !hasWordlistUrl) {
         if (hasUploadState && window.uploadState.uploadedFilePath) {
           payload.wordlist = window.uploadState.uploadedFilePath;
         } else {
-          showToast('please upload a wordlist file', 'error');
+          showToast('please upload a wordlist file or provide a URL', 'error');
           showStep(2);
           return false;
         }
@@ -662,6 +830,183 @@ document.addEventListener('DOMContentLoaded', function() {
         window.uploadState.isFileUploaded = false;
         window.uploadState.uploadedFilePath = '';
         if (wordlistInput) wordlistInput.value = '';
+      }
+    });
+  }
+  
+  // Hybrid attack wordlist upload handler
+  const hybridFileInput = document.getElementById('hybridWL');
+  if (hybridFileInput) {
+    hybridFileInput.addEventListener('change', async function() {
+      if (this.files.length === 0) return;
+      
+      const file = this.files[0];
+      
+      if (file.size > 10 * 1024 * 1024) {
+        showToast('File too large (max 10MB)', 'error');
+        this.value = '';
+        return;
+      }
+      
+      const ext = file.name.toLowerCase().split('.').pop();
+      if (ext !== 'txt' && ext !== 'lst') {
+        showToast('Only .txt and .lst files are supported', 'error');
+        this.value = '';
+        return;
+      }
+      
+      try {
+        const form = new FormData();
+        form.append('file', file, file.name);
+        
+        const res = await fetch('/api/uploads', { 
+          method: 'POST', 
+          body: form 
+        });
+        
+        if (!res.ok) { 
+          const errorText = await res.text();
+          showToast('Upload failed: ' + errorText, 'error');
+          return;
+        }
+        
+        const data = await res.json();
+        
+        // Set the wordlist path in the hidden input
+        const hybridWordlistInput = document.querySelector('input[name="hybrid_wordlist"]');
+        if (hybridWordlistInput) {
+          hybridWordlistInput.value = data.path;
+        }
+        
+        // Update the placeholder text
+        const placeholder = hybridFileInput.parentElement.querySelector('.upload-placeholder span');
+        if (placeholder) {
+          placeholder.textContent = file.name;
+        }
+        
+        showToast(`Hybrid wordlist uploaded: ${data.filename}`, 'success');
+        
+      } catch (error) {
+        showToast('Upload failed: ' + error.message, 'error');
+        this.value = '';
+      }
+    });
+  }
+  
+  // Combination attack first wordlist upload handler
+  const combWL1FileInput = document.getElementById('combWL1');
+  if (combWL1FileInput) {
+    combWL1FileInput.addEventListener('change', async function() {
+      if (this.files.length === 0) return;
+      
+      const file = this.files[0];
+      
+      if (file.size > 10 * 1024 * 1024) {
+        showToast('File too large (max 10MB)', 'error');
+        this.value = '';
+        return;
+      }
+      
+      const ext = file.name.toLowerCase().split('.').pop();
+      if (ext !== 'txt' && ext !== 'lst') {
+        showToast('Only .txt and .lst files are supported', 'error');
+        this.value = '';
+        return;
+      }
+      
+      try {
+        const form = new FormData();
+        form.append('file', file, file.name);
+        
+        const res = await fetch('/api/uploads', { 
+          method: 'POST', 
+          body: form 
+        });
+        
+        if (!res.ok) { 
+          const errorText = await res.text();
+          showToast('Upload failed: ' + errorText, 'error');
+          return;
+        }
+        
+        const data = await res.json();
+        
+        // Set the wordlist1 path in the hidden input
+        const wordlist1Input = document.querySelector('input[name="wordlist1"]');
+        if (wordlist1Input) {
+          wordlist1Input.value = data.path;
+        }
+        
+        // Update the placeholder text
+        const placeholder = combWL1FileInput.parentElement.querySelector('.upload-placeholder span');
+        if (placeholder) {
+          placeholder.textContent = file.name;
+        }
+        
+        showToast(`First wordlist uploaded: ${data.filename}`, 'success');
+        
+      } catch (error) {
+        showToast('Upload failed: ' + error.message, 'error');
+        this.value = '';
+      }
+    });
+  }
+  
+  // Combination attack second wordlist upload handler
+  const combWL2FileInput = document.getElementById('combWL2');
+  if (combWL2FileInput) {
+    combWL2FileInput.addEventListener('change', async function() {
+      if (this.files.length === 0) return;
+      
+      const file = this.files[0];
+      
+      if (file.size > 10 * 1024 * 1024) {
+        showToast('File too large (max 10MB)', 'error');
+        this.value = '';
+        return;
+      }
+      
+      const ext = file.name.toLowerCase().split('.').pop();
+      if (ext !== 'txt' && ext !== 'lst') {
+        showToast('Only .txt and .lst files are supported', 'error');
+        this.value = '';
+        return;
+      }
+      
+      try {
+        const form = new FormData();
+        form.append('file', file, file.name);
+        
+        const res = await fetch('/api/uploads', { 
+          method: 'POST', 
+          body: form 
+        });
+        
+        if (!res.ok) { 
+          const errorText = await res.text();
+          showToast('Upload failed: ' + errorText, 'error');
+          return;
+        }
+        
+        const data = await res.json();
+        
+        // Set the wordlist2 path in the hidden input
+        const wordlist2Input = document.querySelector('input[name="wordlist2"]');
+        if (wordlist2Input) {
+          wordlist2Input.value = data.path;
+        }
+        
+        // Update the placeholder text
+        const placeholder = combWL2FileInput.parentElement.querySelector('.upload-placeholder span');
+        if (placeholder) {
+          placeholder.textContent = file.name;
+        }
+        
+        showToast(`Second wordlist uploaded: ${data.filename}`, 'success');
+        
+      } catch (error) {
+        showToast('Upload failed: ' + error.message, 'error');
+        this.value = '';
       }
     });
   }
@@ -965,6 +1310,51 @@ function setupMethodSwitching() {
   });
 }
 
+function setupSourceToggles() {
+  const uploadSection = document.getElementById('uploadSection');
+  const urlSection = document.getElementById('urlSection');
+  const useDefaultInput = document.getElementById('useDefault');
+  const wordlistUrl = document.getElementById('wordlistUrl');
+  const wlRadios = document.querySelectorAll('input[name="wordlist_source"]');
+  const resetUploadUI = () => {
+    const ph = document.getElementById('uploadPlaceholder');
+    const ctrls = document.getElementById('uploadControls');
+    const file = document.getElementById('uploadFile');
+    if (ph) ph.style.display = 'block';
+    if (ctrls) ctrls.style.display = 'none';
+    if (file) file.value = '';
+  };
+  const setWLSrc = (v) => {
+    if (uploadSection) uploadSection.style.display = 'none';
+    if (urlSection) urlSection.style.display = 'none';
+    if (v === 'upload' && uploadSection) uploadSection.style.display = 'block';
+    if (v === 'url' && urlSection) urlSection.style.display = 'block';
+    if (useDefaultInput) useDefaultInput.value = (v === 'default').toString();
+    if (v === 'default') { resetUploadUI(); if (wordlistUrl) wordlistUrl.value=''; const s=document.getElementById('urlStatus'); if (s) s.style.display='none'; }
+  };
+  wlRadios.forEach(r=>r.addEventListener('change', ()=>{ if (r.checked) setWLSrc(r.value); }));
+  const def = document.querySelector('input[name="wordlist_source"][value="default"]');
+  if (def && def.checked) setWLSrc('default');
+
+  const bind = (name, uploadSel, urlSel) => {
+    const up = document.querySelector(uploadSel);
+    const url = document.querySelector(urlSel);
+    const radios = document.querySelectorAll(`input[name="${name}"]`);
+    const set = (v) => {
+      if (up) up.style.display = 'none';
+      if (url) url.style.display = 'none';
+      if (v === 'upload' && up) up.style.display = 'block';
+      if (v === 'url' && url) url.style.display = 'block';
+    };
+    radios.forEach(r=>r.addEventListener('change', ()=>{ if (r.checked) set(r.value); }));
+    const d = document.querySelector(`input[name="${name}"][value="default"]`);
+    if (d && d.checked) set('default');
+  };
+  bind('hybrid_wordlist_source', '.hybrid-upload-section', '.hybrid-url-section');
+  bind('comb_wl1_source', '.comb-wl1-upload-section', '.comb-wl1-url-section');
+  bind('comb_wl2_source', '.comb-wl2-upload-section', '.comb-wl2-url-section');
+}
+
 // Auto-detection functionality
 function setupAutoDetection() {
   const targetInput = document.getElementById('target');
@@ -1026,8 +1416,8 @@ document.addEventListener('DOMContentLoaded', function() {
   loadAlgorithms();
   // Algorithm search input removed by request; using categorized dropdown only
   
-  // Setup method switching
   setupMethodSwitching();
+  setupSourceToggles();
   
   // Setup auto-detection
   setupAutoDetection();
@@ -1072,7 +1462,6 @@ document.addEventListener('DOMContentLoaded', function() {
     defaultMethodCard.click();
   }
   
-  // Existing code...
   const taskForm = document.getElementById('taskForm');
   if (taskForm) {
     taskForm.addEventListener('submit', createTask);
@@ -1086,7 +1475,6 @@ document.addEventListener('DOMContentLoaded', function() {
   if (goroutinesEl) goroutinesEl.textContent = 'Loading...';
   if (memoryEl) memoryEl.textContent = 'Loading...';
   
-  // Check for saved tasks on load
   loadTasks().then(() => {
     const tasks = document.querySelectorAll('#tasks tbody tr');
     if (tasks.length > 0) {
@@ -1153,7 +1541,194 @@ window.setCharset = function(charset) {
   }
 };
 
+// URL validation function
+function isValidUrl(string) {
+  try {
+    const url = new URL(string);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch (_) {
+    return false;
+  }
+}
+
+// Set wordlist URL from shortcut buttons
+window.setWordlistUrl = function(inputIdOrUrl, url) {
+  let urlInput, urlToSet;
+  
+  // Handle both old and new function signatures
+  if (arguments.length === 1) {
+    // Old signature: setWordlistUrl(url)
+    urlInput = document.getElementById('wordlistUrl');
+    urlToSet = inputIdOrUrl;
+  } else {
+    // New signature: setWordlistUrl(inputId, url)
+    urlInput = document.getElementById(inputIdOrUrl);
+    urlToSet = url;
+  }
+  
+  if (urlInput) {
+    urlInput.value = urlToSet;
+    urlInput.dispatchEvent(new Event('input'));
+    
+    // Show validation status in the matching section
+    validateWordlistUrlInternal(urlToSet, urlInput.id);
+  }
+};
+
+// Wrapper function for validating URL by input element ID
+window.validateWordlistUrl = function(inputIdOrUrl) {
+  let url, inputId = null;
+  if (typeof inputIdOrUrl === 'string' && inputIdOrUrl.startsWith('http')) {
+    url = inputIdOrUrl;
+  } else {
+    inputId = inputIdOrUrl;
+    const input = document.getElementById(inputIdOrUrl);
+    if (!input) return;
+    url = input.value.trim();
+  }
+  validateWordlistUrlInternal(url, inputId);
+};
+
+// Validate wordlist URL (internal function)
+async function validateWordlistUrlInternal(url, inputId) {
+  // Choose the correct status elements based on which input is being validated
+  let statusDiv = document.getElementById('urlStatus');
+  let statusText = document.getElementById('urlStatusText');
+  if (inputId === 'combWordlist1Url') {
+    statusDiv = document.getElementById('combWL1Status');
+    statusText = document.getElementById('combWL1StatusText');
+  } else if (inputId === 'combWordlist2Url') {
+    statusDiv = document.getElementById('combWL2Status');
+    statusText = document.getElementById('combWL2StatusText');
+  } else if (inputId === 'hybridWordlistUrl') {
+    statusDiv = document.getElementById('hybridWLStatus');
+    statusText = document.getElementById('hybridWLStatusText');
+  }
+  const statusIndicator = statusDiv?.querySelector('.status-indicator');
+  
+  if (!statusDiv || !statusText || !statusIndicator) return;
+  
+  if (!url || !isValidUrl(url)) {
+    statusDiv.style.display = 'none';
+    return;
+  }
+  
+  statusDiv.style.display = 'block';
+  statusIndicator.className = 'status-indicator';
+  statusText.textContent = 'Validating URL...';
+  
+  // Special handling for GitHub URLs that typically have CORS issues
+  if (url.includes('github.com/') && url.includes('/releases/')) {
+    statusIndicator.className = 'status-indicator success';
+    statusText.innerHTML = `<i class="fas fa-check-circle"></i> GitHub release URL detected - ready for download`;
+    setTimeout(() => {
+      statusDiv.style.display = 'none';
+    }, 3000);
+    return;
+  }
+  
+  if (url.includes('raw.githubusercontent.com')) {
+    statusIndicator.className = 'status-indicator success';
+    statusText.innerHTML = `<i class="fas fa-check-circle"></i> GitHub raw file URL detected - ready for download`;
+    setTimeout(() => {
+      statusDiv.style.display = 'none';
+    }, 3000);
+    return;
+  }
+  
+  try {
+    // First try HEAD request for efficiency
+    let response = await fetch(url, { method: 'HEAD' });
+    
+    // If HEAD fails (common with GitHub releases), try GET with range for first few bytes
+    if (!response.ok && response.status !== 405) {
+      response = await fetch(url, { 
+        method: 'GET',
+        headers: {
+          'Range': 'bytes=0-1023' // Get only first 1KB to validate
+        }
+      });
+    }
+    
+    // If range request also fails, try a simple GET with abort
+    if (!response.ok) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+      
+      response = await fetch(url, { 
+        method: 'GET',
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+    }
+    
+    if (response.ok || response.status === 206) { // 206 = Partial Content (for range requests)
+      const contentType = response.headers.get('content-type');
+      const contentLength = response.headers.get('content-length') || response.headers.get('content-range');
+      
+      statusIndicator.className = 'status-indicator success';
+      statusText.innerHTML = `<i class="fas fa-check-circle"></i> Valid wordlist URL`;
+      
+      if (contentLength) {
+        let sizeInfo = '';
+        if (response.headers.get('content-range')) {
+          // Extract total size from Content-Range header (e.g., "bytes 0-1023/145963776")
+          const rangeMatch = contentLength.match(/\/(\d+)/);
+          if (rangeMatch) {
+            const totalSize = parseInt(rangeMatch[1]);
+            sizeInfo = ` (${(totalSize / 1024 / 1024).toFixed(1)} MB)`;
+          }
+        } else {
+          const sizeInMB = (parseInt(contentLength) / 1024 / 1024).toFixed(1);
+          sizeInfo = ` (${sizeInMB} MB)`;
+        }
+        statusText.innerHTML += sizeInfo;
+      }
+      
+      setTimeout(() => {
+        statusDiv.style.display = 'none';
+      }, 3000);
+    } else {
+      statusIndicator.className = 'status-indicator error';
+      statusText.innerHTML = `<i class="fas fa-exclamation-triangle"></i> URL not accessible (${response.status})`;
+    }
+  } catch (error) {
+    // Provide more specific error messages
+    if (error.name === 'AbortError') {
+      statusIndicator.className = 'status-indicator warning';
+      statusText.innerHTML = `<i class="fas fa-clock"></i> Validation timeout - URL may be slow`;
+    } else if (url.includes('github.com/') && url.includes('/releases/')) {
+      statusIndicator.className = 'status-indicator success';
+      statusText.innerHTML = `<i class="fas fa-info-circle"></i> GitHub release URL - should work for download`;
+      setTimeout(() => {
+        statusDiv.style.display = 'none';
+      }, 3000);
+    } else {
+      statusIndicator.className = 'status-indicator error';
+      statusText.innerHTML = `<i class="fas fa-exclamation-triangle"></i> Failed to validate URL`;
+    }
+  }
+}
+
 // Toggle advanced algorithm parameters
+function debounce(fn, delay = 300) {
+  let t;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), delay);
+  };
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const ids = ['wordlistUrl', 'hybridWordlistUrl', 'combWordlist1Url', 'combWordlist2Url'];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener('input', debounce(() => validateWordlistUrl(id), 500));
+    }
+  });
+});
+
 window.toggleAdvancedParams = function() {
   const content = document.getElementById('advanced-params');
   const button = document.querySelector('.toggle-advanced');
