@@ -846,6 +846,7 @@ section {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: background-color 150ms ease, color 150ms ease;
 }
 
 .badge-found {
@@ -1095,7 +1096,7 @@ section {
 .progress-bar {
   height: 100%;
   background: linear-gradient(90deg, var(--primary-color), var(--primary-hover));
-  transition: width 0.3s ease;
+  transition: width 0.2s ease-in-out;
   position: relative;
   min-width: 2px;
 }

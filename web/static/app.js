@@ -11,6 +11,22 @@ function badge(status){
   return `<span class="${m[status]||'badge'}">${status}</span>`;
 }
 
+const pendingStatus = new Map(); // taskId -> { status, untilTs }
+
+function setPendingStatus(taskId, status, ttlMs = 1200) {
+  const untilTs = Date.now() + ttlMs;
+  pendingStatus.set(taskId, { status, untilTs });
+}
+
+function getEffectiveStatus(task) {
+  const entry = pendingStatus.get(task.id);
+  if (entry) {
+    if (Date.now() <= entry.untilTs) return entry.status;
+    pendingStatus.delete(task.id);
+  }
+  return task.status;
+}
+
 window.renderTasks = function(tasks){
   const tbody = document.querySelector('#tasks tbody');
   if (!tbody) return;
@@ -25,12 +41,13 @@ window.renderTasks = function(tasks){
       tr.dataset.id = t.id; 
     }
     
-    const tried = t.result?.tried ?? t.progress?.tried ?? '';
+  const status = getEffectiveStatus(t);
+  const tried = t.result?.tried ?? t.progress?.tried ?? '';
     const durMs = t.result ? Math.round((t.result.duration_ns||0)/1e6) : '';
     const result = t.result?.plaintext ? `<strong style="color: var(--success-color);">${escapeHtml(t.result.plaintext)}</strong>` : '';
     
     let progress = '';
-    if (t.status === 'running' && t.progress) {
+  if (status === 'running' && t.progress) {
       const p = t.progress;
       const speed = p.attempts_per_second ? formatSpeed(p.attempts_per_second) : '';
       const eta = p.eta_seconds ? formatDuration(p.eta_seconds) : '';
@@ -61,7 +78,7 @@ window.renderTasks = function(tasks){
           </div>
         </div>
       </div>`;
-    } else if (t.status === 'paused' && t.progress) {
+  } else if (status === 'paused' && t.progress) {
       const p = t.progress;
       const percent = p.progress_percent ? Math.min(p.progress_percent, 100).toFixed(1) + '%' : '';
       progress = `<div class="progress-info paused">
@@ -71,7 +88,7 @@ window.renderTasks = function(tasks){
         </div>
         <small class="muted"><i class="fas fa-pause-circle"></i> Paused at ${percent}</small>
       </div>`;
-    } else if (t.status === 'running' && tried) {
+  } else if (status === 'running' && tried) {
       progress = `<div class="progress-info basic">
         <div class="progress-spinner">
           <i class="fas fa-spinner fa-spin"></i>
@@ -94,7 +111,7 @@ window.renderTasks = function(tasks){
     
     // Generate action buttons based on status
     let actions = '';
-    if (t.status === 'running') {
+  if (status === 'running') {
       actions = `
         <button class="btn-small btn-warning" onclick="pauseTask('${t.id}')" title="Pause task">
           <i class="fas fa-pause"></i>
@@ -103,7 +120,7 @@ window.renderTasks = function(tasks){
           <i class="fas fa-stop"></i>
         </button>
       `;
-    } else if (t.status === 'paused') {
+  } else if (status === 'paused') {
       actions = `
         <button class="btn-small btn-success" onclick="resumeTask('${t.id}')" title="Resume task">
           <i class="fas fa-play"></i>
@@ -126,7 +143,7 @@ window.renderTasks = function(tasks){
         ${algoDisplay}
         <div class="mode-info">${modeInfo}</div>
       </td>
-      <td>${badge(t.status)}</td>
+  <td>${badge(status)}</td>
       <td class="progress-column">${progress}</td>
       <td>${result}</td>
       <td>
@@ -421,6 +438,7 @@ function validatePayload(payload) {
 // New pause/resume functions
 async function pauseTask(taskId) {
   try {
+  setPendingStatus(taskId, 'paused');
     const res = await fetch(`/api/tasks/${taskId}/pause`, { method: 'POST' });
     if (res.ok) {
       showToast('Task paused. State saved for resumption.', 'success');
@@ -438,14 +456,17 @@ async function pauseTask(taskId) {
     } else {
       const error = await res.text();
       showToast('Failed to pause task: ' + error, 'error');
+      pendingStatus.delete(taskId);
     }
   } catch (error) {
     showToast('Error pausing task: ' + error.message, 'error');
+    pendingStatus.delete(taskId);
   }
 }
 
 async function resumeTask(taskId) {
   try {
+  setPendingStatus(taskId, 'running');
     const res = await fetch(`/api/tasks/${taskId}/resume`, { method: 'POST' });
     if (res.ok) {
       showToast('Task resumed from saved state.', 'success');
@@ -461,14 +482,17 @@ async function resumeTask(taskId) {
     } else {
       const error = await res.text();
       showToast('Failed to resume task: ' + error, 'error');
+      pendingStatus.delete(taskId);
     }
   } catch (error) {
     showToast('Error resuming task: ' + error.message, 'error');
+    pendingStatus.delete(taskId);
   }
 }
 
 async function stopTask(taskId) {
   try {
+  setPendingStatus(taskId, 'stopped');
     const res = await fetch(`/api/tasks/${taskId}/stop`, { method: 'POST' });
     if (res.ok) {
       showToast('Task stopped', 'success');
@@ -485,9 +509,11 @@ async function stopTask(taskId) {
       loadTasks();
     } else {
       showToast('Failed to stop task', 'error');
+      pendingStatus.delete(taskId);
     }
   } catch (error) {
     showToast('Error stopping task: ' + error.message, 'error');
+    pendingStatus.delete(taskId);
   }
 }
 

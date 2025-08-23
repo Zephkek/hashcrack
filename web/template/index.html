@@ -695,29 +695,7 @@
       });
     });
 
-    // SSE for real-time updates
-    document.addEventListener('DOMContentLoaded', function() {
-      try {
-        const eventSource = new EventSource('/api/events');
-        eventSource.addEventListener('tasks', (e) => {
-          try {
-            const tasks = JSON.parse(e.data);
-            if (window.renderTasks) {
-              window.renderTasks(tasks);
-            }
-          } catch (err) {
-            console.error('Failed to parse SSE data:', err);
-          }
-        });
-        
-        eventSource.onerror = (err) => {
-          console.warn('SSE connection error, falling back to polling:', err);
-          eventSource.close();
-        };
-      } catch (err) {
-        console.warn('SSE not supported or failed:', err);
-      }
-    });
+  /* duplicate SSE removed; app.js manages SSE/polling */
   </script>
 </body>
 </html>

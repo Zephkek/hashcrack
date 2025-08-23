@@ -208,6 +208,51 @@ type Manager struct {
 	lastCheckpoint     map[string]time.Time
 }
 
+// TaskDTO is a lightweight view for UI responses (excludes heavy/internal fields like Events)
+type TaskDTO struct {
+	ID                 string           `json:"id"`
+	Algo               string           `json:"algo"`
+	Mode               string           `json:"mode"`
+	Mask               string           `json:"mask,omitempty"`
+	Wordlist           string           `json:"wordlist,omitempty"`
+	UseDefaultWordlist bool             `json:"use_default_wordlist"`
+	BFMin              int              `json:"bf_min,omitempty"`
+	BFMax              int              `json:"bf_max,omitempty"`
+	Detected           []string         `json:"detected,omitempty"`
+	Status             string           `json:"status"`
+	IsPaused           bool             `json:"is_paused"`
+	LastCheckpoint     time.Time        `json:"last_checkpoint,omitempty"`
+	Result             *cracker.Result  `json:"result,omitempty"`
+	Progress           *TaskProgress    `json:"progress,omitempty"`
+}
+
+func taskToDTO(t *Task) *TaskDTO {
+	if t == nil { return nil }
+	dto := &TaskDTO{
+		ID:                 t.ID,
+		Algo:               t.Algo,
+		Mode:               t.Mode,
+		Mask:               t.Mask,
+		Wordlist:           t.Wordlist,
+		UseDefaultWordlist: t.UseDefaultWordlist,
+		BFMin:              t.BFMin,
+		BFMax:              t.BFMax,
+		Detected:           t.Detected,
+		Status:             t.Status,
+		IsPaused:           t.IsPaused,
+		LastCheckpoint:     t.LastCheckpoint,
+		Result:             t.Result,
+		Progress:           t.GetProgress(),
+	}
+	return dto
+}
+
+func tasksToDTOs(tasks []*Task) []*TaskDTO {
+	out := make([]*TaskDTO, 0, len(tasks))
+	for _, t := range tasks { out = append(out, taskToDTO(t)) }
+	return out
+}
+
 // Shutdown gracefully pauses running tasks and persists their state
 func (m *Manager) Shutdown(ctx context.Context) {
 	// Collect task IDs to avoid holding lock during cancellations
@@ -449,6 +494,8 @@ func (m *Manager) PauseTask(taskID string) error {
 	}
 	
 	if task.Status != "running" {
+		// Idempotent: if already paused, pretend success
+		if task.Status == "paused" { return nil }
 		return fmt.Errorf("task is not running")
 	}
 
@@ -583,24 +630,31 @@ func (s *Server) handleTasksStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", 500)
 		return
 	}
-	ticker := time.NewTicker(1500 * time.Millisecond)
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	// Send initial payload
-	data, _ := json.Marshal(s.m.List())
+	data, _ := json.Marshal(tasksToDTOs(s.m.List()))
 	fmt.Fprintf(w, "event: tasks\ndata: %s\n\n", data)
 	flusher.Flush()
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			data, _ := json.Marshal(s.m.List())
+			data, _ := json.Marshal(tasksToDTOs(s.m.List()))
 			fmt.Fprintf(w, "event: tasks\ndata: %s\n\n", data)
+			flusher.Flush()
+		case <-heartbeat.C:
+			// send comment heartbeat to keep proxies from closing the connection
+			fmt.Fprintf(w, ": keep-alive\n\n")
 			flusher.Flush()
 		}
 	}
@@ -639,7 +693,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(s.m.List())
+	json.NewEncoder(w).Encode(tasksToDTOs(s.m.List()))
 	case http.MethodPost:
 		var req struct {
 			Algo string `json:"algo"`
@@ -749,7 +803,7 @@ func (s *Server) handleTaskWithActions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(t)
+		json.NewEncoder(w).Encode(taskToDTO(t))
 		
 	case http.MethodDelete:
 		s.m.mu.Lock()
@@ -834,6 +888,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
 	
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -841,16 +896,21 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	ticker := time.NewTicker(1500 * time.Millisecond)
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
-	
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+    
 	for {
 		select {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			data, _ := json.Marshal(s.m.List())
+			data, _ := json.Marshal(tasksToDTOs(s.m.List()))
 			fmt.Fprintf(w, "event: tasks\ndata: %s\n\n", data)
+			flusher.Flush()
+		case <-heartbeat.C:
+			fmt.Fprintf(w, ": keep-alive\n\n")
 			flusher.Flush()
 		}
 	}
@@ -1105,7 +1165,7 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 	}()
 	
 	m.mu.RLock()
-	if t.Status == "cancelled" || t.Status == "stopped" {
+	if t.Status == "cancelled" || t.Status == "stopped" || t.Status == "paused" {
 		m.mu.RUnlock()
 		return
 	}
@@ -1201,8 +1261,8 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 				}
 				checkpointMutex.Unlock()
 			}
-		},
-		ProgressEvery: 5000,
+	},
+	ProgressEvery: 3000,
 		Transform: buildTransform(t.Rules),
 	})
 	defer c.Close()
