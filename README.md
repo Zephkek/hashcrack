@@ -4,7 +4,7 @@
 </p>
 
 <p align="center">
-  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white" alt="Go 1.23+" /></a>
+  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.23%2B-00ADD8?logo=go&logoColor=white" alt="Go 1.23+" /></a>
   <img src="https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker ready" />
   <img src="https://img.shields.io/badge/Compose-v3.8-2496ED?logo=docker&logoColor=white" alt="Docker Compose 3.8" />
   <img src="https://img.shields.io/badge/Platform-linux%2Famd64-lightgrey" alt="Platform" />
