@@ -15,14 +15,14 @@ import (
 )
 
 // RIPEMD-160 algorithm
-type ripemd160 struct{}
-func (r ripemd160) Name() string { return "ripemd160" }
-func (r ripemd160) Hash(plain string, p Params) (string, error) {
+type ripemd160Hasher struct{}
+func (r ripemd160Hasher) Name() string { return "ripemd160" }
+func (r ripemd160Hasher) Hash(plain string, p Params) (string, error) {
 	h := ripemd160pkg.New()
 	h.Write(append([]byte(plain), p.Salt...))
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
-func (r ripemd160) Compare(target, plain string, p Params) (bool, error) { h, _ := r.Hash(plain, p); return strings.EqualFold(h, target), nil }
+func (r ripemd160Hasher) Compare(target, plain string, p Params) (bool, error) { h, _ := r.Hash(plain, p); return strings.EqualFold(h, target), nil }
 
 // LM Hash (Microsoft LAN Manager)
 // this is DES based and im still trying to understand how it works but from what i understand right now the algorithm goes by 6 steps:
@@ -100,7 +100,7 @@ func (l ldapSHA1) Hash(plain string, _ Params) (string, error) {
 func (l ldapSHA1) Compare(target, plain string, p Params) (bool, error) { h, _ := l.Hash(plain, p); return h == target, nil }
 
 func init() {
-	Register(ripemd160{})
+	Register(ripemd160Hasher{})
 	Register(mysql41 {})
 	Register(cisco7 {})
 	registry["cisco"] = cisco7{}

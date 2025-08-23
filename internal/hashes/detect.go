@@ -1,60 +1,86 @@
 package hashes
 
 import (
+    "regexp"
     "sort"
     "strings"
 )
 
+// Detect returns a ranked list of candidate algorithms for a given target string.
+// It evaluates all registered algorithms using Validate() and then applies
+// heuristic scoring to prioritize likely matches based on prefixes, length, and case.
 func Detect(target string) []string {
     t := strings.TrimSpace(target)
     if t == "" { return nil }
 
-    order := []string{
-        "ntlm", "md5", "lm",
-        "sha1", "ripemd160",
-        "mysql",
-        "sha256", "sha384", "sha512",
-        "sha3-224", "sha3-256", "sha3-384", "sha3-512",
-        "shake128", "shake256",
-        "cisco7", "ldap_md5", "ldap_sha1",
-    }
+    // Evaluate all registered algorithms
+    algos := List()
+    type cand struct{ name string; score int }
+    candidates := []cand{}
 
-    idx := map[string]int{}
-    add := func(name string){ if _, ok := idx[name]; !ok { idx[name] = len(idx) } }
-
+    // Basic properties
     lower := strings.ToLower(t)
+    upper := strings.ToUpper(t)
+    isHex := reHex.MatchString(t)
+    l := len(t)
+
+    // Quick prefix heuristics
+    hasPrefix := func(p string) bool { return strings.HasPrefix(lower, strings.ToLower(p)) }
+    boost := map[string]int{}
     switch {
-    case strings.HasPrefix(lower, "*$"):
-        add("mysql")
-    case strings.HasPrefix(lower, "*"):
-        add("mysql")
-    case strings.HasPrefix(t, "{MD5}"):
-        add("ldap_md5")
-    case strings.HasPrefix(t, "{SHA}"):
-        add("ldap_sha1")
+    case hasPrefix("$2a$") || hasPrefix("$2b$") || hasPrefix("$2y$"):
+        boost["bcrypt"] += 60
+    case hasPrefix("scrypt:"):
+        boost["scrypt"] += 55
+    case hasPrefix("argon2id:"):
+        boost["argon2id"] += 55
+    case hasPrefix("pbkdf2-"):
+        boost["pbkdf2-sha1"] += 50; boost["pbkdf2-sha256"] += 50; boost["pbkdf2-sha512"] += 50
+    }
+    if hasPrefix("*") { boost["mysql"] += 40 }
+    if strings.HasPrefix(t, "{MD5}") { boost["ldap_md5"] += 45 }
+    if strings.HasPrefix(t, "{SHA}") { boost["ldap_sha1"] += 45 }
+    if regexp.MustCompile(`^\d{2}[0-9A-Fa-f]{2,}$`).MatchString(t) { boost["cisco7"] += 40 }
+
+    // Length/case-based hints for collisions
+    if isHex {
+        switch l {
+        case 32:
+            if t == upper {
+                boost["ntlm"] += 30; boost["lm"] += 25; boost["md5"] += 10
+            } else {
+                boost["md5"] += 30; boost["ntlm"] += 10
+            }
+        case 40: boost["sha1"] += 25; boost["ripemd160"] += 15
+        case 64: boost["sha256"] += 25
+        case 96: boost["sha384"] += 20
+        case 128: boost["sha512"] += 20
+        }
     }
 
-    var matches []string
-    for _, name := range order {
+    // Validate and score
+    for _, name := range algos {
         ok, _ := Validate(name, t)
-        if ok { matches = append(matches, name) }
+        if !ok { continue }
+        score := 10 // base score for any validator match
+        if b, ok := boost[name]; ok { score += b }
+        // Additional small nudges
+        if strings.Contains(name, "sha3") && (l == 64 || l == 96 || l == 128) { score += 5 }
+        if strings.Contains(name, "shake") && (l == 64 || l == 128) { score += 4 }
+        candidates = append(candidates, cand{name, score})
     }
 
-    for name := range idx {
-        found := false
-        for _, m := range matches { if m == name { found = true; break } }
-        if !found { matches = append([]string{name}, matches...) }
-    }
+    if len(candidates) == 0 { return nil }
 
-    rank := map[string]int{}
-    for i, n := range order { rank[n] = i }
-    sort.SliceStable(matches, func(i, j int) bool {
-        ri, iok := rank[matches[i]]
-        rj, jok := rank[matches[j]]
-        if iok && jok { return ri < rj }
-        if iok { return true }
-        if jok { return false }
-        return matches[i] < matches[j]
+    sort.SliceStable(candidates, func(i, j int) bool {
+        if candidates[i].score != candidates[j].score { return candidates[i].score > candidates[j].score }
+        return candidates[i].name < candidates[j].name
     })
-    return matches
+
+    out := make([]string, 0, len(candidates))
+    seen := map[string]bool{}
+    for _, c := range candidates {
+        if !seen[c.name] { out = append(out, c.name); seen[c.name] = true }
+    }
+    return out
 }

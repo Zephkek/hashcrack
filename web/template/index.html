@@ -69,35 +69,22 @@
               <label class="form-label">
                 <i class="fas fa-cpu"></i>
                 Hash Algorithm
-                <span class="help-icon" data-tooltip="The hashing algorithm used to create the hash. Auto-detect will try to identify it based on the hash format.">
+                <span class="help-icon" data-tooltip="Pick the hashing algorithm used. Background detection will suggest likely matches when you enter a hash.">
                   <i class="fas fa-question-circle"></i>
                 </span>
               </label>
               <select name="algo" id="algo" class="form-select">
-                <option value="md5">MD5 (128-bit)</option>
-                <option value="sha1">SHA-1 (160-bit)</option>
-                <option value="sha256">SHA-256 (256-bit)</option>
-                <option value="sha384">SHA-384 (384-bit)</option>
-                <option value="sha512">SHA-512 (512-bit)</option>
-                <option value="sha3-224">SHA3-224 (224-bit)</option>
-                <option value="sha3-256">SHA3-256 (256-bit)</option>
-                <option value="sha3-384">SHA3-384 (384-bit)</option>
-                <option value="sha3-512">SHA3-512 (512-bit)</option>
-                <option value="shake128">SHAKE128 (Extendable)</option>
-                <option value="shake256">SHAKE256 (Extendable)</option>
-                <option value="ntlm">NTLM (Windows)</option>
-                <option value="bcrypt">bcrypt (Adaptive)</option>
-                <option value="scrypt">scrypt (Memory-hard)</option>
-                <option value="argon2id">Argon2id (Modern)</option>
-                <option value="pbkdf2-sha1">PBKDF2-SHA1</option>
-                <option value="pbkdf2-sha256">PBKDF2-SHA256</option>
-                <option value="pbkdf2-sha512">PBKDF2-SHA512</option>
-                <option value="lm">LM Hash (Legacy Windows)</option>
-                <option value="ripemd160">RIPEMD-160</option>
-                <option value="mysql">MySQL Password</option>
-                <option value="cisco">Cisco Type 7</option>
-                <option value="ldap_md5">LDAP MD5</option>
-                <option value="ldap_sha1">LDAP SHA-1</option>
+                <option value="" disabled selected>Select algorithm…</option>
+                <option value="" data-header="true" disabled>—— Common Algorithms ——</option>
+                <optgroup label="Common Algorithms">
+                  <option value="md5">MD5 (128-bit)</option>
+                  <option value="sha1">SHA-1 (160-bit)</option>
+                  <option value="sha256">SHA-256 (256-bit)</option>
+                  <option value="sha512">SHA-512 (512-bit)</option>
+                  <option value="ntlm">NTLM (Windows)</option>
+                  <option value="bcrypt">bcrypt (Adaptive)</option>
+                </optgroup>
+                <!-- Dynamically loaded categories will be appended here by app.js -->
               </select>
               <div class="algo-info" id="algoInfo">
                 <div class="detected-info" id="detectedInfo" style="display: none;">
@@ -117,6 +104,84 @@
               </label>
               <input name="salt" class="form-input" placeholder="Enter salt if known (optional)" />
               <div class="input-help">Only needed for salted hashes. Check your hash source for salt information.</div>
+            </div>
+
+            <!-- Advanced Algorithm Parameters -->
+            <div class="form-group advanced-params">
+              <label class="form-label">
+                <i class="fas fa-cogs"></i>
+                Advanced Algorithm Parameters
+                <span class="help-icon" data-tooltip="Fine-tune algorithm-specific parameters. Default values work for most cases.">
+                  <i class="fas fa-question-circle"></i>
+                </span>
+              </label>
+              <button type="button" class="btn btn-secondary toggle-advanced" onclick="toggleAdvancedParams()">
+                <i class="fas fa-chevron-down"></i> Show Advanced Parameters
+              </button>
+              
+              <div class="advanced-params-content" id="advanced-params" style="display: none;">
+                <div class="params-grid">
+                  <!-- PBKDF2 Parameters -->
+                  <div class="param-group">
+                    <h4><i class="fas fa-key"></i> PBKDF2 Parameters</h4>
+                    <div class="form-group">
+                      <label class="form-label">PBKDF2 Iterations</label>
+                      <input name="pbkdf2_iterations" type="number" class="form-input" value="10000" min="1" max="1000000" />
+                      <div class="input-help">Higher values are more secure but slower</div>
+                    </div>
+                  </div>
+
+                  <!-- Bcrypt Parameters -->
+                  <div class="param-group">
+                    <h4><i class="fas fa-shield-alt"></i> Bcrypt Parameters</h4>
+                    <div class="form-group">
+                      <label class="form-label">Bcrypt Cost</label>
+                      <input name="bcrypt_cost" type="number" class="form-input" value="12" min="4" max="31" />
+                      <div class="input-help">Cost factor (rounds = 2^cost)</div>
+                    </div>
+                  </div>
+
+                  <!-- Scrypt Parameters -->
+                  <div class="param-group">
+                    <h4><i class="fas fa-memory"></i> Scrypt Parameters</h4>
+                    <div class="form-group">
+                      <label class="form-label">Scrypt N</label>
+                      <input name="scrypt_n" type="number" class="form-input" value="32768" min="1" max="1048576" />
+                      <div class="input-help">CPU/memory cost parameter</div>
+                    </div>
+                    <div class="form-group">
+                      <label class="form-label">Scrypt R</label>
+                      <input name="scrypt_r" type="number" class="form-input" value="8" min="1" max="256" />
+                      <div class="input-help">Block size parameter</div>
+                    </div>
+                    <div class="form-group">
+                      <label class="form-label">Scrypt P</label>
+                      <input name="scrypt_p" type="number" class="form-input" value="1" min="1" max="256" />
+                      <div class="input-help">Parallelization parameter</div>
+                    </div>
+                  </div>
+
+                  <!-- Argon2 Parameters -->
+                  <div class="param-group">
+                    <h4><i class="fas fa-microchip"></i> Argon2 Parameters</h4>
+                    <div class="form-group">
+                      <label class="form-label">Argon2 Time</label>
+                      <input name="argon_time" type="number" class="form-input" value="1" min="1" max="100" />
+                      <div class="input-help">Time cost (iterations)</div>
+                    </div>
+                    <div class="form-group">
+                      <label class="form-label">Argon2 Memory (KB)</label>
+                      <input name="argon_memory" type="number" class="form-input" value="65536" min="1024" max="1048576" />
+                      <div class="input-help">Memory usage in kilobytes</div>
+                    </div>
+                    <div class="form-group">
+                      <label class="form-label">Argon2 Parallelism</label>
+                      <input name="argon_parallelism" type="number" class="form-input" value="4" min="1" max="64" />
+                      <div class="input-help">Number of parallel threads</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div class="form-actions">
@@ -172,6 +237,48 @@
                   <span>🔄 Exhaustive</span>
                   <span>🐌 Very Slow</span>
                   <span>🔋 High Resource Usage</span>
+                </div>
+              </div>
+
+              <div class="method-card" data-method="combination">
+                <div class="method-header">
+                  <i class="fas fa-layer-group"></i>
+                  <h4>Combination Attack</h4>
+                  <span class="method-badge new">New</span>
+                </div>
+                <p>Combine words from two different wordlists (e.g., first name + last name, word + word).</p>
+                <div class="method-stats">
+                  <span>🎯 Targeted</span>
+                  <span>⚡ Fast</span>
+                  <span>🔗 Combinatorial</span>
+                </div>
+              </div>
+
+              <div class="method-card" data-method="hybrid">
+                <div class="method-header">
+                  <i class="fas fa-puzzle-piece"></i>
+                  <h4>Hybrid Attack</h4>
+                  <span class="method-badge advanced">Advanced</span>
+                </div>
+                <p>Combine wordlist entries with mask patterns (e.g., dictionary word + 2 digits).</p>
+                <div class="method-stats">
+                  <span>🧩 Flexible</span>
+                  <span>⏱️ Medium Speed</span>
+                  <span>🎨 Creative</span>
+                </div>
+              </div>
+
+              <div class="method-card" data-method="association">
+                <div class="method-header">
+                  <i class="fas fa-link"></i>
+                  <h4>Association Attack</h4>
+                  <span class="method-badge smart">Smart</span>
+                </div>
+                <p>Generate candidates based on context clues (username, email, filename, company name).</p>
+                <div class="method-stats">
+                  <span>🧠 Intelligent</span>
+                  <span>⚡ Fast</span>
+                  <span>🎯 Context-Aware</span>
                 </div>
               </div>
             </div>
@@ -330,6 +437,121 @@
               </div>
             </div>
 
+            <!-- Combination Attack Configuration -->
+            <div class="method-config mode-combination" style="display: none;">
+              <h4><i class="fas fa-layer-group"></i> Combination Attack Configuration</h4>
+              <div class="form-group">
+                <label class="form-label">First Wordlist</label>
+                <div class="upload-area">
+                  <input type="file" id="combWL1" accept=".txt,.lst" style="display: none;" />
+                  <div class="upload-placeholder" onclick="document.getElementById('combWL1').click()">
+                    <i class="fas fa-cloud-upload-alt"></i>
+                    <span>Select first wordlist file</span>
+                    <small>Common words, first names, etc.</small>
+                  </div>
+                </div>
+                <input name="wordlist1" type="hidden" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Second Wordlist</label>
+                <div class="upload-area">
+                  <input type="file" id="combWL2" accept=".txt,.lst" style="display: none;" />
+                  <div class="upload-placeholder" onclick="document.getElementById('combWL2').click()">
+                    <i class="fas fa-cloud-upload-alt"></i>
+                    <span>Select second wordlist file</span>
+                    <small>Numbers, surnames, suffixes, etc.</small>
+                  </div>
+                </div>
+                <input name="wordlist2" type="hidden" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Separator (Optional)</label>
+                <input name="separator" class="form-input" placeholder="e.g., -, _, space (leave empty for none)" />
+                <div class="input-help">Character(s) to insert between combined words</div>
+              </div>
+            </div>
+
+            <!-- Hybrid Attack Configuration -->
+            <div class="method-config mode-hybrid" style="display: none;">
+              <h4><i class="fas fa-puzzle-piece"></i> Hybrid Attack Configuration</h4>
+              <div class="form-group">
+                <label class="form-label">Hybrid Mode</label>
+                <div class="hybrid-modes">
+                  <label class="radio-option">
+                    <input type="radio" name="hybrid_mode" value="wordlist_mask" checked />
+                    <div class="radio-content">
+                      <i class="fas fa-book"></i>
+                      <span>Wordlist + Mask</span>
+                      <small>Dictionary word followed by mask pattern</small>
+                    </div>
+                  </label>
+                  <label class="radio-option">
+                    <input type="radio" name="hybrid_mode" value="mask_wordlist" />
+                    <div class="radio-content">
+                      <i class="fas fa-mask"></i>
+                      <span>Mask + Wordlist</span>
+                      <small>Mask pattern followed by dictionary word</small>
+                    </div>
+                  </label>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Wordlist</label>
+                <div class="upload-area">
+                  <input type="file" id="hybridWL" accept=".txt,.lst" style="display: none;" />
+                  <div class="upload-placeholder" onclick="document.getElementById('hybridWL').click()">
+                    <i class="fas fa-cloud-upload-alt"></i>
+                    <span>Select wordlist file</span>
+                    <small>Dictionary words to combine with mask</small>
+                  </div>
+                </div>
+                <input name="wordlist" type="hidden" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Mask Pattern</label>
+                <input name="hybrid_mask" class="form-input" placeholder="e.g., ?d?d?d (3 digits)" />
+                <div class="mask-help">
+                  <strong>Mask Characters:</strong> ?l=lowercase, ?u=uppercase, ?d=digit, ?s=symbol, ?a=all
+                </div>
+              </div>
+            </div>
+
+            <!-- Association Attack Configuration -->
+            <div class="method-config mode-association" style="display: none;">
+              <h4><i class="fas fa-link"></i> Association Attack Configuration</h4>
+              <div class="form-group">
+                <label class="form-label">Context Hints</label>
+                <div class="hint-inputs">
+                  <input name="username" class="form-input" placeholder="Username (e.g., john.doe)" />
+                  <input name="email" class="form-input" placeholder="Email (e.g., john@company.com)" />
+                  <input name="filename" class="form-input" placeholder="Filename or document name" />
+                  <input name="company" class="form-input" placeholder="Company or organization name" />
+                </div>
+                <div class="input-help">Provide any known context to generate intelligent password candidates</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Association Strategies</label>
+                <div class="strategy-options">
+                  <label class="checkbox-option">
+                    <input type="checkbox" name="strategies" value="variations" checked />
+                    <span>Username variations (caps, numbers, symbols)</span>
+                  </label>
+                  <label class="checkbox-option">
+                    <input type="checkbox" name="strategies" value="common_patterns" checked />
+                    <span>Common patterns (123, 2023, !, etc.)</span>
+                  </label>
+                  <label class="checkbox-option">
+                    <input type="checkbox" name="strategies" value="email_domain" checked />
+                    <span>Email domain combinations</span>
+                  </label>
+                  <label class="checkbox-option">
+                    <input type="checkbox" name="strategies" value="company_info" checked />
+                    <span>Company name variations</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
             <div class="form-actions">
               <button type="button" class="btn btn-secondary" onclick="prevStep(1)">
                 <i class="fas fa-arrow-left"></i> Back
@@ -363,38 +585,6 @@
                       <span>1</span>
                       <span id="workerValue">1</span>
                       <span>16</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- FIX: Only show algorithm settings when needed -->
-              <div class="setting-group algorithm-specific" id="algorithmSettings" style="display: none;">
-                <h4><i class="fas fa-sliders-h"></i> Algorithm-Specific Parameters</h4>
-                <div class="algo-params" id="bcryptParams" style="display: none;">
-                  <div class="form-group">
-                    <label class="form-label">bcrypt Cost Factor (4-31)</label>
-                    <input name="bcrypt_cost" type="number" min="4" max="31" placeholder="12" class="form-input" />
-                    <div class="input-help">Higher values = more secure but slower to crack</div>
-                  </div>
-                </div>
-                <div class="algo-params" id="scryptParams" style="display: none;">
-                  <div class="form-group">
-                    <label class="form-label">scrypt Parameters</label>
-                    <div class="param-grid">
-                      <input name="scrypt_n" type="number" placeholder="N (32768)" class="form-input" />
-                      <input name="scrypt_r" type="number" placeholder="r (8)" class="form-input" />
-                      <input name="scrypt_p" type="number" placeholder="p (1)" class="form-input" />
-                    </div>
-                  </div>
-                </div>
-                <div class="algo-params" id="argonParams" style="display: none;">
-                  <div class="form-group">
-                    <label class="form-label">Argon2 Parameters</label>
-                    <div class="param-grid">
-                      <input name="argon_time" type="number" placeholder="Time cost" class="form-input" />
-                      <input name="argon_mem_kb" type="number" placeholder="Memory (KB)" class="form-input" />
-                      <input name="argon_par" type="number" placeholder="Parallelism" class="form-input" />
                     </div>
                   </div>
                 </div>
@@ -622,67 +812,6 @@
         });
       }
     });
-
-    // FIX: algorithm settings only show for algorithms with parameters
-    document.addEventListener('DOMContentLoaded', function() {
-      const algoSelect = document.getElementById('algo');
-      if (algoSelect) {
-        updateAlgorithmSettings(algoSelect.value);
-        
-        algoSelect.addEventListener('change', function() {
-          updateAlgorithmSettings(this.value);
-        });
-      }
-    });
-    
-    function updateAlgorithmSettings(algo) {
-      const algorithmSettings = document.getElementById('algorithmSettings');
-      
-      document.querySelectorAll('.algo-params').forEach(p => p.style.display = 'none');
-      
-      const hasParams = ['bcrypt', 'scrypt', 'argon2id'].includes(algo);
-      
-      if (algorithmSettings) {
-        algorithmSettings.style.display = hasParams ? 'block' : 'none';
-      }
-      
-      if (algo === 'bcrypt') {
-        const bcryptParams = document.getElementById('bcryptParams');
-        if (bcryptParams) bcryptParams.style.display = 'block';
-      } else if (algo === 'scrypt') {
-        const scryptParams = document.getElementById('scryptParams');
-        if (scryptParams) scryptParams.style.display = 'block';
-      } else if (algo === 'argon2id') {
-        const argonParams = document.getElementById('argonParams');
-        if (argonParams) argonParams.style.display = 'block';
-      }
-    }
-
-    document.addEventListener('DOMContentLoaded', function() {
-      const targetInput = document.getElementById('target');
-      if (targetInput) {
-        const updateSuggestions = async () => {
-          const target = targetInput.value.trim();
-          if (!target) return;
-          try {
-            const r = await fetch('/api/detect?target=' + encodeURIComponent(target));
-            const j = await r.json();
-            if (j.candidates && j.candidates.length) {
-              const detectedInfo = document.getElementById('detectedInfo');
-              const detectedAlgos = document.getElementById('detectedAlgos');
-              if (detectedInfo && detectedAlgos) {
-                detectedAlgos.textContent = j.candidates.join(', ');
-                detectedInfo.style.display = 'flex';
-              }
-            }
-          } catch (e) {
-            console.error('Failed to detect algorithm:', e);
-          }
-        };
-        targetInput.addEventListener('blur', updateSuggestions);
-      }
-    });
-
     document.addEventListener('DOMContentLoaded', function() {
       updateMethodConfig();
       
@@ -695,7 +824,29 @@
       });
     });
 
-  /* duplicate SSE removed; app.js manages SSE/polling */
+    // SSE for real-time updates
+    document.addEventListener('DOMContentLoaded', function() {
+      try {
+        const eventSource = new EventSource('/api/events');
+        eventSource.addEventListener('tasks', (e) => {
+          try {
+            const tasks = JSON.parse(e.data);
+            if (window.renderTasks) {
+              window.renderTasks(tasks);
+            }
+          } catch (err) {
+            console.error('Failed to parse SSE data:', err);
+          }
+        });
+        
+        eventSource.onerror = (err) => {
+          console.warn('SSE connection error, falling back to polling:', err);
+          eventSource.close();
+        };
+      } catch (err) {
+        console.warn('SSE not supported or failed:', err);
+      }
+    });
   </script>
 </body>
 </html>

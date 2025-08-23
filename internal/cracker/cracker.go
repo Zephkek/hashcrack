@@ -233,9 +233,8 @@ func (c *Cracker) CrackWordlistResumable(ctx context.Context, h hashes.Hasher, p
 	}
 
 	scanner := bufio.NewScanner(f)
-	// Use a larger buffer to reduce Scan overhead on long lines
-	buf := make([]byte, 0, 4*1024*1024)
-	scanner.Buffer(buf, 4*1024*1024)
+	buf := make([]byte, 0, 2*1024*1024)
+	scanner.Buffer(buf, 2*1024*1024)
 	
 	// Skip to resume point
 	if resumeOpts.StartLine > 0 {

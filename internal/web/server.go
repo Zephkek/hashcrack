@@ -37,15 +37,16 @@ type Task struct {
 	Mode      string            `json:"mode"`
 	BFMin     int               `json:"bf_min"`
 	BFMax     int               `json:"bf_max"`
-	BFChars   string            `json:"bf_chars"`
-	BcryptCost int             `json:"bcrypt_cost"`
-	ScryptN    int             `json:"scrypt_n"`
-	ScryptR    int             `json:"scrypt_r"`
-	ScryptP    int             `json:"scrypt_p"`
-	ArgonTime  uint32          `json:"argon_time"`
-	ArgonMemKB uint32          `json:"argon_mem_kb"`
-	ArgonPar   uint8           `json:"argon_par"`
-	Status    string            `json:"status"`
+	BFChars         string            `json:"bf_chars"`
+	BcryptCost      int               `json:"bcrypt_cost"`
+	ScryptN         int               `json:"scrypt_n"`
+	ScryptR         int               `json:"scrypt_r"`
+	ScryptP         int               `json:"scrypt_p"`
+	ArgonTime       uint32            `json:"argon_time"`
+	ArgonMemKB      uint32            `json:"argon_mem_kb"`
+	ArgonPar        uint8             `json:"argon_par"`
+	PBKDF2Iterations int              `json:"pbkdf2_iterations"`
+	Status          string            `json:"status"`
 	Result    *cracker.Result   `json:"result,omitempty"`
 	Events    []map[string]any  `json:"events,omitempty"`
 	CreatedAt time.Time         `json:"created_at"`
@@ -76,7 +77,6 @@ type TaskProgress struct {
 	MemoryMB          float64   `json:"memory_mb"`
 	LastUpdated       time.Time `json:"last_updated"`
 	
-	// Internal fields for stable statistics calculation
 	startTime         time.Time     `json:"-"`
 	speedHistory      []speedSample `json:"-"`
 	lastSpeedUpdate   time.Time     `json:"-"`
@@ -90,7 +90,6 @@ type speedSample struct {
 	speed     float64
 }
 
-// update progress safely
 func (t *Task) UpdateProgress(update func(*TaskProgress)) {
 	t.progressMu.Lock()
 	defer t.progressMu.Unlock()
@@ -105,7 +104,6 @@ func (t *Task) UpdateProgress(update func(*TaskProgress)) {
 	t.Progress.LastUpdated = time.Now()
 }
 
-// get progress (returns copy)
 func (t *Task) GetProgress() *TaskProgress {
 	t.progressMu.RLock()
 	defer t.progressMu.RUnlock()
@@ -114,12 +112,10 @@ func (t *Task) GetProgress() *TaskProgress {
 		return nil
 	}
 	
-	// copy to avoid races
 	p := *t.Progress
 	return &p
 }
 
-// updateStableSpeed calculates a more stable hash rate using moving average
 func (p *TaskProgress) updateStableSpeed(tried uint64, now time.Time) {
 	if p.avgWindow == 0 {
 		p.avgWindow = 30 * time.Second
@@ -134,12 +130,10 @@ func (p *TaskProgress) updateStableSpeed(tried uint64, now time.Time) {
 	
 	timeSinceLastUpdate := now.Sub(p.lastSpeedUpdate)
 	if timeSinceLastUpdate >= 1*time.Second {
-		// Use delta-based speed to avoid spikes after resume
 		var deltaTried uint64
 		if tried >= p.lastSampleTried {
 			deltaTried = tried - p.lastSampleTried
 		} else {
-			// If counter reset unexpectedly, treat as absolute
 			deltaTried = tried
 		}
 		secs := timeSinceLastUpdate.Seconds()
@@ -181,7 +175,6 @@ func (p *TaskProgress) updateStableSpeed(tried uint64, now time.Time) {
 	}
 }
 
-// calculateStableETA provides a more stable ETA calculation
 func (p *TaskProgress) calculateStableETA() {
 	if p.Total > 0 && p.AttemptsPerSecond > 0 && p.Tried < p.Total {
 		remaining := p.Total - p.Tried
@@ -203,59 +196,11 @@ type Manager struct {
 	contexts     map[string]context.CancelFunc
 	stateManager *StateManager
 	
-	// Checkpoint settings
 	checkpointInterval time.Duration
 	lastCheckpoint     map[string]time.Time
 }
 
-// TaskDTO is a lightweight view for UI responses (excludes heavy/internal fields like Events)
-type TaskDTO struct {
-	ID                 string           `json:"id"`
-	Algo               string           `json:"algo"`
-	Mode               string           `json:"mode"`
-	Mask               string           `json:"mask,omitempty"`
-	Wordlist           string           `json:"wordlist,omitempty"`
-	UseDefaultWordlist bool             `json:"use_default_wordlist"`
-	BFMin              int              `json:"bf_min,omitempty"`
-	BFMax              int              `json:"bf_max,omitempty"`
-	Detected           []string         `json:"detected,omitempty"`
-	Status             string           `json:"status"`
-	IsPaused           bool             `json:"is_paused"`
-	LastCheckpoint     time.Time        `json:"last_checkpoint,omitempty"`
-	Result             *cracker.Result  `json:"result,omitempty"`
-	Progress           *TaskProgress    `json:"progress,omitempty"`
-}
-
-func taskToDTO(t *Task) *TaskDTO {
-	if t == nil { return nil }
-	dto := &TaskDTO{
-		ID:                 t.ID,
-		Algo:               t.Algo,
-		Mode:               t.Mode,
-		Mask:               t.Mask,
-		Wordlist:           t.Wordlist,
-		UseDefaultWordlist: t.UseDefaultWordlist,
-		BFMin:              t.BFMin,
-		BFMax:              t.BFMax,
-		Detected:           t.Detected,
-		Status:             t.Status,
-		IsPaused:           t.IsPaused,
-		LastCheckpoint:     t.LastCheckpoint,
-		Result:             t.Result,
-		Progress:           t.GetProgress(),
-	}
-	return dto
-}
-
-func tasksToDTOs(tasks []*Task) []*TaskDTO {
-	out := make([]*TaskDTO, 0, len(tasks))
-	for _, t := range tasks { out = append(out, taskToDTO(t)) }
-	return out
-}
-
-// Shutdown gracefully pauses running tasks and persists their state
 func (m *Manager) Shutdown(ctx context.Context) {
-	// Collect task IDs to avoid holding lock during cancellations
 	m.mu.RLock()
 	ids := make([]string, 0, len(m.tasks))
 	for id := range m.tasks {
@@ -270,7 +215,6 @@ func (m *Manager) Shutdown(ctx context.Context) {
 		if ok && t.Status == "running" {
 			t.Status = "paused"
 			t.IsPaused = true
-			// Persist immediately
 			m.saveTaskState(t)
 			if cancel, exists := m.contexts[id]; exists {
 				cancel()
@@ -286,7 +230,6 @@ func (m *Manager) Shutdown(ctx context.Context) {
 }
 
 func NewManager() *Manager {
-	// Initialize state manager (configurable directory)
 	stateDir := os.Getenv("HASHCRACK_STATE_DIR")
 	if strings.TrimSpace(stateDir) == "" {
 		stateDir = "states"
@@ -300,16 +243,14 @@ func NewManager() *Manager {
 		tasks:              map[string]*Task{},
 		contexts:           map[string]context.CancelFunc{},
 		stateManager:       stateManager,
-		checkpointInterval: 30 * time.Second, // Save state every 30 seconds
+		checkpointInterval: 30 * time.Second,
 		lastCheckpoint:     map[string]time.Time{},
 	}
 	
-	// Restore any saved tasks
 	if stateManager != nil {
 		m.restoreSavedTasks()
 	}
 	
-	// Start cleanup routine
 	go m.cleanupRoutine()
 	
 	log.Printf("State directory: %s", stateDir)
@@ -319,7 +260,6 @@ func NewManager() *Manager {
 func (m *Manager) restoreSavedTasks() {
 	resumable := m.stateManager.GetResumableTasks()
 	for _, state := range resumable {
-		// Convert state to task
 		task := &Task{
 			ID:                 state.TaskID,
 			Algo:               state.Algo,
@@ -350,11 +290,10 @@ func (m *Manager) restoreSavedTasks() {
 			WordlistLine:       state.WordlistLine,
 			BruteforceIndex:    state.BruteforceIndex,
 			MaskIndex:          state.MaskIndex,
-			CurrentLength:      state.CurrentLength,  // Added this
+			CurrentLength:      state.CurrentLength, 
 			TotalRuntime:       state.TotalRuntime,
 		}
 		
-		// Set progress
 		task.UpdateProgress(func(p *TaskProgress) {
 			p.Tried = state.TriedCount
 			p.Total = state.TotalCount
@@ -374,7 +313,6 @@ func (m *Manager) cleanupRoutine() {
 	
 	for range ticker.C {
 		if m.stateManager != nil {
-			// Clean up states older than 7 days
 			if err := m.stateManager.CleanupOldStates(7 * 24 * time.Hour); err != nil {
 				log.Printf("Failed to cleanup old states: %v", err)
 			}
@@ -417,7 +355,7 @@ func (m *Manager) saveTaskState(task *Task) {
 		WordlistLine:       task.WordlistLine,
 		BruteforceIndex:    task.BruteforceIndex,
 		MaskIndex:          task.MaskIndex,
-		CurrentLength:      task.CurrentLength,  // Added this
+		CurrentLength:      task.CurrentLength,  
 		TotalRuntime:       task.TotalRuntime,
 	}
 	
@@ -483,7 +421,6 @@ func (m *Manager) List() []*Task {
 	return out
 }
 
-// PauseTask pauses a running task
 func (m *Manager) PauseTask(taskID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -494,19 +431,14 @@ func (m *Manager) PauseTask(taskID string) error {
 	}
 	
 	if task.Status != "running" {
-		// Idempotent: if already paused, pretend success
-		if task.Status == "paused" { return nil }
 		return fmt.Errorf("task is not running")
 	}
 
-	// Mark paused first to avoid race with runTask finalization
 	task.Status = "paused"
 	task.IsPaused = true
 
-	// Save state before cancelling so runTask can detect pause
 	m.saveTaskState(task)
 
-	// Cancel the context to stop the task
 	if cancel, ok := m.contexts[taskID]; ok {
 		cancel()
 		delete(m.contexts, taskID)
@@ -515,7 +447,6 @@ func (m *Manager) PauseTask(taskID string) error {
 	return nil
 }
 
-// ResumeTask resumes a paused task
 func (m *Manager) ResumeTask(taskID string) error {
 	m.mu.Lock()
 	task, ok := m.tasks[taskID]
@@ -529,7 +460,6 @@ func (m *Manager) ResumeTask(taskID string) error {
 		return fmt.Errorf("task is not paused")
 	}
 	
-	// Get the hasher
 	h, err := hashes.Get(task.Algo)
 	if err != nil {
 		m.mu.Unlock()
@@ -540,13 +470,12 @@ func (m *Manager) ResumeTask(taskID string) error {
 	task.IsPaused = false
 	m.mu.Unlock()
 	
-	// Resume the task
+
 	go m.runTask(taskID, task, h)
 	
 	return nil
 }
 
-// Server struct
 type Server struct {
 	m *Manager
 }
@@ -606,6 +535,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/uploads", s.handleUploads)
 	mux.HandleFunc("/api/algorithms", s.handleAlgorithms)
 	mux.HandleFunc("/api/detect", s.handleDetect)
+	mux.HandleFunc("/api/validate", s.handleValidate)
 	
 	staticDir := "web/static"
 	if _, err := os.Stat(staticDir); os.IsNotExist(err) {
@@ -625,36 +555,27 @@ func (s *Server) routes() http.Handler {
 	
 	return corsMiddleware(loggingMiddleware(mux))
 }
-// Server-Sent Events for tasks list to smooth UI updates
 func (s *Server) handleTasksStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", 500)
 		return
 	}
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(1500 * time.Millisecond)
 	defer ticker.Stop()
-	// Send initial payload
-	data, _ := json.Marshal(tasksToDTOs(s.m.List()))
+	data, _ := json.Marshal(s.m.List())
 	fmt.Fprintf(w, "event: tasks\ndata: %s\n\n", data)
 	flusher.Flush()
-	heartbeat := time.NewTicker(15 * time.Second)
-	defer heartbeat.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			data, _ := json.Marshal(tasksToDTOs(s.m.List()))
+			data, _ := json.Marshal(s.m.List())
 			fmt.Fprintf(w, "event: tasks\ndata: %s\n\n", data)
-			flusher.Flush()
-		case <-heartbeat.C:
-			// send comment heartbeat to keep proxies from closing the connection
-			fmt.Fprintf(w, ": keep-alive\n\n")
 			flusher.Flush()
 		}
 	}
@@ -693,7 +614,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(tasksToDTOs(s.m.List()))
+		json.NewEncoder(w).Encode(s.m.List())
 	case http.MethodPost:
 		var req struct {
 			Algo string `json:"algo"`
@@ -715,6 +636,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			ArgonTime uint32 `json:"argon_time"`
 			ArgonMemKB uint32 `json:"argon_mem_kb"`
 			ArgonPar uint8 `json:"argon_par"`
+			PBKDF2Iterations int `json:"pbkdf2_iterations"`
 		}
 		
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -722,8 +644,8 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		
-		algo := strings.TrimSpace(strings.ToLower(req.Algo))
-		detected := []string(nil)
+	algo := strings.TrimSpace(strings.ToLower(req.Algo))
+	detected := []string(nil)
         
 		{
 			raw := hashes.Detect(req.Target)
@@ -741,6 +663,23 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		h, err := hashes.Get(algo)
 		if err != nil {
 			http.Error(w, err.Error(), 400)
+			return
+		}
+
+		if ok, msg := hashes.Validate(algo, req.Target); !ok {
+			if len(detected) == 0 {
+				raw := hashes.Detect(req.Target)
+				if len(raw) > 0 {
+					reg := map[string]struct{}{}
+					for _, n := range hashes.List() { reg[n] = struct{}{} }
+					for _, n := range raw { if _, ok := reg[n]; ok { detected = append(detected, n) } }
+				}
+			}
+			hint := ""
+			if len(detected) > 0 {
+				hint = "; suggestions: " + strings.Join(detected, ", ")
+			}
+			http.Error(w, msg+hint, 400)
 			return
 		}
 		
@@ -764,6 +703,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			ArgonTime: req.ArgonTime,
 			ArgonMemKB: req.ArgonMemKB,
 			ArgonPar: req.ArgonPar,
+			PBKDF2Iterations: req.PBKDF2Iterations,
 			Status: "queued",
 			CreatedAt: time.Now(),
 			Detected: detected,
@@ -803,7 +743,7 @@ func (s *Server) handleTaskWithActions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(taskToDTO(t))
+		json.NewEncoder(w).Encode(t)
 		
 	case http.MethodDelete:
 		s.m.mu.Lock()
@@ -888,7 +828,6 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
 	
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -896,21 +835,16 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(1500 * time.Millisecond)
 	defer ticker.Stop()
-	heartbeat := time.NewTicker(15 * time.Second)
-	defer heartbeat.Stop()
-    
+	
 	for {
 		select {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			data, _ := json.Marshal(tasksToDTOs(s.m.List()))
+			data, _ := json.Marshal(s.m.List())
 			fmt.Fprintf(w, "event: tasks\ndata: %s\n\n", data)
-			flusher.Flush()
-		case <-heartbeat.C:
-			fmt.Fprintf(w, ": keep-alive\n\n")
 			flusher.Flush()
 		}
 	}
@@ -980,6 +914,31 @@ func (s *Server) handleDetect(w http.ResponseWriter, r *http.Request) {
 	cands := hashes.Detect(target)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"candidates": cands})
+}
+
+// handleValidate checks if a given target string is valid for the selected algorithm
+func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
+	// Accept both GET query params and JSON body for flexibility
+	algo := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("algo")))
+	target := r.URL.Query().Get("target")
+
+	if algo == "" && r.Method == http.MethodPost {
+		var req struct { Algo, Target string }
+		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+			algo = strings.ToLower(strings.TrimSpace(req.Algo))
+			target = req.Target
+		}
+	}
+
+	ok, msg := hashes.Validate(algo, target)
+	// Also include detector suggestions to help the caller
+	suggestions := hashes.Detect(target)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"ok": ok,
+		"message": msg,
+		"candidates": suggestions,
+	})
 }
 
 const maxUpload = 10 << 20
@@ -1165,7 +1124,7 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 	}()
 	
 	m.mu.RLock()
-	if t.Status == "cancelled" || t.Status == "stopped" || t.Status == "paused" {
+	if t.Status == "cancelled" || t.Status == "stopped" {
 		m.mu.RUnlock()
 		return
 	}
@@ -1261,8 +1220,8 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 				}
 				checkpointMutex.Unlock()
 			}
-	},
-	ProgressEvery: 3000,
+		},
+		ProgressEvery: 5000,
 		Transform: buildTransform(t.Rules),
 	})
 	defer c.Close()
@@ -1276,6 +1235,7 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 		ArgonTime:        t.ArgonTime,
 		ArgonMemoryKB:    t.ArgonMemKB,
 		ArgonParallelism: t.ArgonPar,
+		PBKDF2Iterations: t.PBKDF2Iterations,
 	}
 	
 	// If a stop was issued just before starting, do not run

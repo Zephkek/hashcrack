@@ -18,7 +18,7 @@ type ConcurrentBruteForcer struct {
 	maxLen    int
 	workers   int
 	batchSize int
-	startIdx  uint64  // Resume support
+	startIdx  uint64
 }
 
 type Result struct {
@@ -54,7 +54,6 @@ func New(charset string, minLen, maxLen, workers int) *ConcurrentBruteForcer {
 	}
 }
 
-// SetStartIndex sets the starting index for resuming
 func (bf *ConcurrentBruteForcer) SetStartIndex(idx uint64) {
 	bf.startIdx = idx
 }
@@ -71,10 +70,12 @@ func (bf *ConcurrentBruteForcer) Crack(ctx context.Context, hasher hashes.Hasher
 		tried = bf.startIdx
 	}
 
+	// Prepare digest interfaces
 	var targetDigest []byte
 	var byteDigester hashes.ByteDigester
 	var runeDigester hashes.RuneDigester
 	var batchDigester hashes.BatchByteDigester
+	
 	if bd, ok := hasher.(hashes.ByteDigester); ok {
 		if td, err := hex.DecodeString(strings.TrimPrefix(strings.ToLower(target), "0x")); err == nil {
 			targetDigest = td
@@ -88,6 +89,7 @@ func (bf *ConcurrentBruteForcer) Crack(ctx context.Context, hasher hashes.Hasher
 		batchDigester = bbd
 	}
 
+	// Use work items with index ranges, not strings
 	workChan := make(chan workItem, bf.workers*4)
 	resultChan := make(chan string, 1)
 	
@@ -113,7 +115,7 @@ func (bf *ConcurrentBruteForcer) Crack(ctx context.Context, hasher hashes.Hasher
 			result.Found = true
 			result.Plaintext = found
 		}
-		cancel() 
+		cancel()
 	case <-ctx.Done():
 	}
 	
@@ -149,10 +151,13 @@ func (bf *ConcurrentBruteForcer) worker(
 ) {
 	defer wg.Done()
 
+	// Reusable buffers - critical for performance
 	bufRunes := make([]rune, bf.maxLen)
 	bufBytes := make([]byte, bf.maxLen)
 	asciiCharset := bf.isASCIICharset()
 	localPending := uint64(0)
+	
+	// Adaptive progress interval
 	progressInterval := uint64(2000)
 	algoName := hasher.Name()
 	algoLower := strings.ToLower(algoName)
@@ -213,24 +218,35 @@ func (bf *ConcurrentBruteForcer) processWorkItem(
 	digits := bf.indexToDigits(item.startIndex, item.length)
 	bf.digitsToBuf(digits, bufRunes)
 	if asciiCharset {
-		for i := 0; i < item.length; i++ { bufBytes[i] = byte(bufRunes[i]) }
+		for i := 0; i < item.length; i++ {
+			bufBytes[i] = byte(bufRunes[i])
+		}
 	}
 	attempts := item.endIndex - item.startIndex
 
+	// Batch digest optimization for high-performance hashing
 	if asciiCharset && batchDigester != nil && len(targetDigest) > 0 && item.length >= 16 {
 		const batchSize = 64
 		plainsBufs := make([][]byte, batchSize)
-		for i := 0; i < batchSize; i++ { plainsBufs[i] = make([]byte, item.length) }
+		for i := 0; i < batchSize; i++ {
+			plainsBufs[i] = make([]byte, item.length)
+		}
+		
 		for n := uint64(0); n < attempts; {
 			remaining := int(attempts - n)
-			if remaining > batchSize { remaining = batchSize }
+			if remaining > batchSize {
+				remaining = batchSize
+			}
 			plains := plainsBufs[:remaining]
+			
 			for i := 0; i < remaining; i++ {
 				copy(plains[i], bufBytes[:item.length])
 				if i+1 < remaining {
 					if asciiCharset {
 						changed := bf.incrementDigitsInPlaceASCII(digits, bufBytes, item.length)
-						if changed >= 0 { bufRunes[changed] = rune(bufBytes[changed]) }
+						if changed >= 0 {
+							bufRunes[changed] = rune(bufBytes[changed])
+						}
 					} else {
 						changed := bf.incrementDigitsInPlace(digits)
 						r := bf.charset[digits[changed]]
@@ -238,6 +254,7 @@ func (bf *ConcurrentBruteForcer) processWorkItem(
 					}
 				}
 			}
+			
 			sums, _ := batchDigester.DigestMany(plains, params)
 			for i := 0; i < len(sums); i++ {
 				(*localPending)++
@@ -252,11 +269,14 @@ func (bf *ConcurrentBruteForcer) processWorkItem(
 					}
 				}
 			}
+			
 			n += uint64(len(plains))
 			if n < attempts {
 				if asciiCharset {
 					changed := bf.incrementDigitsInPlaceASCII(digits, bufBytes, item.length)
-					if changed >= 0 { bufRunes[changed] = rune(bufBytes[changed]) }
+					if changed >= 0 {
+						bufRunes[changed] = rune(bufBytes[changed])
+					}
 				} else {
 					changed := bf.incrementDigitsInPlace(digits)
 					r := bf.charset[digits[changed]]
@@ -264,6 +284,7 @@ func (bf *ConcurrentBruteForcer) processWorkItem(
 				}
 			}
 		}
+		
 		if *localPending > 0 {
 			atomic.AddUint64(globalTried, *localPending)
 			*localPending = 0
@@ -289,7 +310,9 @@ func (bf *ConcurrentBruteForcer) processWorkItem(
 				candidateStr = string(bufRunes[:item.length])
 				ok, _ = hasher.Compare(target, candidateStr, params)
 			}
-			if ok && candidateStr == "" { candidateStr = string(bufRunes[:item.length]) }
+			if ok && candidateStr == "" {
+				candidateStr = string(bufRunes[:item.length])
+			}
 		} else {
 			candidateStr = string(bufRunes[:item.length])
 			ok, _ = hasher.Compare(target, candidateStr, params)
@@ -319,7 +342,9 @@ func (bf *ConcurrentBruteForcer) processWorkItem(
 			if progressCb != nil {
 				if candidateStr == "" {
 					if asciiCharset {
-						for i := 0; i < item.length; i++ { bufBytes[i] = byte(bufRunes[i]) }
+						for i := 0; i < item.length; i++ {
+							bufBytes[i] = byte(bufRunes[i])
+						}
 						candidateStr = string(bufBytes[:item.length])
 					} else {
 						candidateStr = string(bufRunes[:item.length])
@@ -336,34 +361,6 @@ func (bf *ConcurrentBruteForcer) processWorkItem(
 	}
 
 	return ""
-}
-
-func (bf *ConcurrentBruteForcer) distributeWork(ctx context.Context, workChan chan<- workItem, total uint64) {
-	defer close(workChan)
-	
-	for length := bf.minLen; length <= bf.maxLen; length++ {
-		combinations := bf.calculateCombinationsForLength(length)
-		
-		batchSize := uint64(bf.batchSize)
-		for start := uint64(0); start < combinations; start += batchSize {
-			end := start + batchSize
-			if end > combinations {
-				end = combinations
-			}
-			
-			item := workItem{
-				startIndex: start,
-				endIndex:   end,
-				length:     length,
-			}
-			
-			select {
-			case workChan <- item:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}
 }
 
 func (bf *ConcurrentBruteForcer) distributeWorkResumable(ctx context.Context, workChan chan<- workItem, total uint64) {
@@ -384,12 +381,10 @@ func (bf *ConcurrentBruteForcer) distributeWorkResumable(ctx context.Context, wo
 			batchStartGlobal := globalIndex + start
 			batchEndGlobal := globalIndex + end
 			
-			// Skip if this batch is before our resume point
 			if bf.startIdx > 0 && batchEndGlobal <= bf.startIdx {
 				continue
 			}
 			
-			// Adjust the batch if we're resuming from within it
 			adjustedStart := start
 			if bf.startIdx > 0 && batchStartGlobal < bf.startIdx && batchEndGlobal > bf.startIdx {
 				adjustedStart = start + (bf.startIdx - batchStartGlobal)
@@ -429,15 +424,6 @@ func (bf *ConcurrentBruteForcer) calculateCombinationsForLength(length int) uint
 	return combinations
 }
 
-func (bf *ConcurrentBruteForcer) indexToCombination(index uint64, length int, buf []rune) {
-	charsetLen := uint64(len(bf.charset))
-	
-	for i := length - 1; i >= 0; i-- {
-		buf[i] = bf.charset[index%charsetLen]
-		index /= charsetLen
-	}
-}
-
 func (bf *ConcurrentBruteForcer) indexToDigits(index uint64, length int) []int {
 	charsetLen := uint64(len(bf.charset))
 	digits := make([]int, length)
@@ -454,18 +440,6 @@ func (bf *ConcurrentBruteForcer) digitsToBuf(digits []int, buf []rune) {
 	}
 }
 
-func (bf *ConcurrentBruteForcer) incrementDigits(digits []int) {
-	base := len(bf.charset)
-	for i := len(digits) - 1; i >= 0; i-- {
-		d := digits[i] + 1
-		if d < base {
-			digits[i] = d
-			return
-		}
-		digits[i] = 0
-	}
-}
-
 func (bf *ConcurrentBruteForcer) incrementDigitsInPlace(digits []int) int {
 	base := len(bf.charset)
 	for i := len(digits) - 1; i >= 0; i-- {
@@ -477,20 +451,6 @@ func (bf *ConcurrentBruteForcer) incrementDigitsInPlace(digits []int) int {
 		digits[i] = 0
 	}
 	return 0
-}
-
-func (bf *ConcurrentBruteForcer) isASCIICharset() bool {
-	for _, r := range bf.charset {
-		if r > 0x7F { return false }
-	}
-	return true
-}
-
-func constEq(a, b []byte) bool {
-	if len(a) != len(b) { return false }
-	var v byte
-	for i := 0; i < len(a); i++ { v |= a[i] ^ b[i] }
-	return v == 0
 }
 
 func (bf *ConcurrentBruteForcer) incrementDigitsInPlaceASCII(digits []int, bufBytes []byte, length int) int {
@@ -506,4 +466,32 @@ func (bf *ConcurrentBruteForcer) incrementDigitsInPlaceASCII(digits []int, bufBy
 		bufBytes[i] = byte(bf.charset[0])
 	}
 	return -1
+}
+
+func (bf *ConcurrentBruteForcer) isASCIICharset() bool {
+	for _, r := range bf.charset {
+		if r > 0x7F {
+			return false
+		}
+	}
+	return true
+}
+
+func constEq(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	var v byte
+	for i := 0; i < len(a); i++ {
+		v |= a[i] ^ b[i]
+	}
+	return v == 0
+}
+
+func (bf *ConcurrentBruteForcer) GetProgress() (uint64, uint64) {
+	return bf.startIdx, bf.calculateTotal()
+}
+
+type ByteDigester interface {
+	DigestBytes(plain []byte, p hashes.Params) ([]byte, error)
 }

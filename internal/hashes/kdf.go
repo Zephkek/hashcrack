@@ -81,7 +81,12 @@ func (k kdfHasher) Compare(target string, plain string, p Params) (bool, error) 
 		if err != nil { return false, err }
 		salt, _ := hex.DecodeString(saltHex)
 		key, _ := hex.DecodeString(keyHex)
-		b, err := scrypt.Key([]byte(plain), salt, 1<<15, 8, 1, len(key))
+		// Use the same parameters as generation
+		N := 1<<15; r := 8; P := 1
+		if p.ScryptN > 0 { N = p.ScryptN }
+		if p.ScryptR > 0 { r = p.ScryptR }
+		if p.ScryptP > 0 { P = p.ScryptP }
+		b, err := scrypt.Key([]byte(plain), salt, N, r, P, len(key))
 		if err != nil { return false, err }
 		return hex.EncodeToString(b) == hex.EncodeToString(key), nil
 	case "argon2id":
@@ -89,7 +94,12 @@ func (k kdfHasher) Compare(target string, plain string, p Params) (bool, error) 
 		if err != nil { return false, err }
 		salt, _ := hex.DecodeString(saltHex)
 		key, _ := hex.DecodeString(keyHex)
-		b := argon2.IDKey([]byte(plain), salt, 1, 64*1024, 4, uint32(len(key)))
+		// Use the same parameters as generation
+		t := uint32(1); mem := uint32(64*1024); par := uint8(4)
+		if p.ArgonTime > 0 { t = p.ArgonTime }
+		if p.ArgonMemoryKB > 0 { mem = p.ArgonMemoryKB }
+		if p.ArgonParallelism > 0 { par = p.ArgonParallelism }
+		b := argon2.IDKey([]byte(plain), salt, t, mem, par, uint32(len(key)))
 		return hex.EncodeToString(b) == hex.EncodeToString(key), nil
 	case "pbkdf2-sha1":
 		saltHex, iterStr, keyHex, err := split4(target, "pbkdf2-sha1")

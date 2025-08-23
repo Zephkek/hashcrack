@@ -11,22 +11,6 @@ function badge(status){
   return `<span class="${m[status]||'badge'}">${status}</span>`;
 }
 
-const pendingStatus = new Map(); // taskId -> { status, untilTs }
-
-function setPendingStatus(taskId, status, ttlMs = 1200) {
-  const untilTs = Date.now() + ttlMs;
-  pendingStatus.set(taskId, { status, untilTs });
-}
-
-function getEffectiveStatus(task) {
-  const entry = pendingStatus.get(task.id);
-  if (entry) {
-    if (Date.now() <= entry.untilTs) return entry.status;
-    pendingStatus.delete(task.id);
-  }
-  return task.status;
-}
-
 window.renderTasks = function(tasks){
   const tbody = document.querySelector('#tasks tbody');
   if (!tbody) return;
@@ -41,13 +25,12 @@ window.renderTasks = function(tasks){
       tr.dataset.id = t.id; 
     }
     
-  const status = getEffectiveStatus(t);
-  const tried = t.result?.tried ?? t.progress?.tried ?? '';
+    const tried = t.result?.tried ?? t.progress?.tried ?? '';
     const durMs = t.result ? Math.round((t.result.duration_ns||0)/1e6) : '';
     const result = t.result?.plaintext ? `<strong style="color: var(--success-color);">${escapeHtml(t.result.plaintext)}</strong>` : '';
     
     let progress = '';
-  if (status === 'running' && t.progress) {
+    if (t.status === 'running' && t.progress) {
       const p = t.progress;
       const speed = p.attempts_per_second ? formatSpeed(p.attempts_per_second) : '';
       const eta = p.eta_seconds ? formatDuration(p.eta_seconds) : '';
@@ -78,7 +61,7 @@ window.renderTasks = function(tasks){
           </div>
         </div>
       </div>`;
-  } else if (status === 'paused' && t.progress) {
+    } else if (t.status === 'paused' && t.progress) {
       const p = t.progress;
       const percent = p.progress_percent ? Math.min(p.progress_percent, 100).toFixed(1) + '%' : '';
       progress = `<div class="progress-info paused">
@@ -88,7 +71,7 @@ window.renderTasks = function(tasks){
         </div>
         <small class="muted"><i class="fas fa-pause-circle"></i> Paused at ${percent}</small>
       </div>`;
-  } else if (status === 'running' && tried) {
+    } else if (t.status === 'running' && tried) {
       progress = `<div class="progress-info basic">
         <div class="progress-spinner">
           <i class="fas fa-spinner fa-spin"></i>
@@ -111,7 +94,7 @@ window.renderTasks = function(tasks){
     
     // Generate action buttons based on status
     let actions = '';
-  if (status === 'running') {
+    if (t.status === 'running') {
       actions = `
         <button class="btn-small btn-warning" onclick="pauseTask('${t.id}')" title="Pause task">
           <i class="fas fa-pause"></i>
@@ -120,7 +103,7 @@ window.renderTasks = function(tasks){
           <i class="fas fa-stop"></i>
         </button>
       `;
-  } else if (status === 'paused') {
+    } else if (t.status === 'paused') {
       actions = `
         <button class="btn-small btn-success" onclick="resumeTask('${t.id}')" title="Resume task">
           <i class="fas fa-play"></i>
@@ -143,7 +126,7 @@ window.renderTasks = function(tasks){
         ${algoDisplay}
         <div class="mode-info">${modeInfo}</div>
       </td>
-  <td>${badge(status)}</td>
+      <td>${badge(t.status)}</td>
       <td class="progress-column">${progress}</td>
       <td>${result}</td>
       <td>
@@ -287,6 +270,22 @@ async function createTask(evt){
     if (!payload || !validatePayload(payload)) {
       return;
     }
+    // Client-side preflight: validate selected algorithm against target using server's validator
+    try {
+      const vres = await fetch(`/api/validate?algo=${encodeURIComponent(payload.algo)}&target=${encodeURIComponent(payload.target)}`);
+      if (vres.ok) {
+        const v = await vres.json();
+        if (v && v.ok === false) {
+          const msg = v.message ? v.message : 'selected algorithm does not match the target format';
+          const sugg = Array.isArray(v.candidates) && v.candidates.length ? `\nSuggestions: ${v.candidates.slice(0,6).join(', ')}` : '';
+          showToast(`${msg}${sugg}`, 'error');
+          showStep(1);
+          return;
+        }
+      }
+    } catch (e) {
+      // Non-fatal: continue, server will still validate on POST
+    }
     
     const res = await fetch('/api/tasks', {
       method:'POST', 
@@ -328,8 +327,40 @@ async function createTask(evt){
 }
 
 function collectFormData(form) {
-  const fd = new FormData(form);
-  const payload = Object.fromEntries(fd.entries());
+  // Instead of using FormData which might skip hidden fields, 
+  // manually collect all form inputs
+  const payload = {};
+  
+  // Get all form inputs, selects, and textareas
+  const inputs = form.querySelectorAll('input, select, textarea');
+  
+  inputs.forEach(input => {
+    if (input.name) {
+      if (input.type === 'checkbox' || input.type === 'radio') {
+        if (input.checked) {
+          if (payload[input.name]) {
+            // Handle multiple checkboxes with same name
+            if (Array.isArray(payload[input.name])) {
+              payload[input.name].push(input.value);
+            } else {
+              payload[input.name] = [payload[input.name], input.value];
+            }
+          } else {
+            payload[input.name] = input.value;
+          }
+        }
+      } else {
+        payload[input.name] = input.value;
+      }
+    }
+  });
+  
+  // Convert arrays to proper format for rules
+  if (payload.rules && !Array.isArray(payload.rules)) {
+    payload.rules = [payload.rules];
+  } else if (!payload.rules) {
+    payload.rules = [];
+  }
   
   payload.workers = Math.max(1, Number(payload.workers||1));
   payload.bf_min = Number(payload.bf_min||0);
@@ -365,13 +396,28 @@ function collectFormData(form) {
   
   payload.rules = Array.from(form.querySelectorAll('input[name="rules"]:checked')).map(el=>el.value);
   
-  ['bcrypt_cost', 'scrypt_n', 'scrypt_r', 'scrypt_p', 'argon_time', 'argon_mem_kb', 'argon_par'].forEach(field => {
-    if (payload[field]) {
+  // Map HTML form field names to Go struct field names
+  if (payload.argon_memory) {
+    payload.argon_mem_kb = Number(payload.argon_memory);
+    delete payload.argon_memory;
+  }
+  if (payload.argon_parallelism) {
+    payload.argon_par = Number(payload.argon_parallelism);
+    delete payload.argon_parallelism;
+  }
+  
+  ['bcrypt_cost', 'scrypt_n', 'scrypt_r', 'scrypt_p', 'argon_time', 'argon_mem_kb', 'argon_par', 'pbkdf2_iterations'].forEach(field => {
+    if (payload[field] && payload[field] !== '' && payload[field] !== '0') {
       payload[field] = Number(payload[field]);
     } else {
       delete payload[field];
     }
   });
+  
+  // Handle hybrid mask - copy hybrid_mask to mask if mode is hybrid and mask is empty
+  if (payload.mode === 'hybrid' && payload.hybrid_mask && (!payload.mask || payload.mask.trim() === '')) {
+    payload.mask = payload.hybrid_mask;
+  }
   
   return payload;
 }
@@ -383,7 +429,7 @@ function validatePayload(payload) {
     return false;
   }
   
-  if (!payload.algo || payload.algo === 'auto') {
+  if (!payload.algo || payload.algo === '') {
     showToast('please select the algorithm', 'error');
     showStep(1);
     return false;
@@ -438,7 +484,6 @@ function validatePayload(payload) {
 // New pause/resume functions
 async function pauseTask(taskId) {
   try {
-  setPendingStatus(taskId, 'paused');
     const res = await fetch(`/api/tasks/${taskId}/pause`, { method: 'POST' });
     if (res.ok) {
       showToast('Task paused. State saved for resumption.', 'success');
@@ -456,17 +501,14 @@ async function pauseTask(taskId) {
     } else {
       const error = await res.text();
       showToast('Failed to pause task: ' + error, 'error');
-      pendingStatus.delete(taskId);
     }
   } catch (error) {
     showToast('Error pausing task: ' + error.message, 'error');
-    pendingStatus.delete(taskId);
   }
 }
 
 async function resumeTask(taskId) {
   try {
-  setPendingStatus(taskId, 'running');
     const res = await fetch(`/api/tasks/${taskId}/resume`, { method: 'POST' });
     if (res.ok) {
       showToast('Task resumed from saved state.', 'success');
@@ -482,17 +524,14 @@ async function resumeTask(taskId) {
     } else {
       const error = await res.text();
       showToast('Failed to resume task: ' + error, 'error');
-      pendingStatus.delete(taskId);
     }
   } catch (error) {
     showToast('Error resuming task: ' + error.message, 'error');
-    pendingStatus.delete(taskId);
   }
 }
 
 async function stopTask(taskId) {
   try {
-  setPendingStatus(taskId, 'stopped');
     const res = await fetch(`/api/tasks/${taskId}/stop`, { method: 'POST' });
     if (res.ok) {
       showToast('Task stopped', 'success');
@@ -509,11 +548,9 @@ async function stopTask(taskId) {
       loadTasks();
     } else {
       showToast('Failed to stop task', 'error');
-      pendingStatus.delete(taskId);
     }
   } catch (error) {
     showToast('Error stopping task: ' + error.message, 'error');
-    pendingStatus.delete(taskId);
   }
 }
 
@@ -824,4 +861,313 @@ window.resumeTask = resumeTask;
 window.stopTask = stopTask;
 window.deleteTask = deleteTask;
 window.showToast = showToast;
+
+// Load algorithms dynamically from the API
+async function loadAlgorithms() {
+  try {
+    const res = await fetch('/api/algorithms');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    
+    const data = await res.json();
+    const algorithms = data.algorithms || [];
+    
+    const select = document.getElementById('algo');
+    if (select && algorithms.length > 0) {
+      // Remove any previously injected optgroups (keep the first optgroup with common algos and the disabled placeholder)
+      Array.from(select.querySelectorAll('optgroup[data-dynamic]')).forEach(n => n.remove());
+      
+      // Sort algorithms alphabetically
+      const sortedAlgos = algorithms.slice().sort((a,b)=>a.localeCompare(b));
+      
+      // Create categories
+      const categories = {
+        'MD5/SHA Family': [],
+        'BLAKE/Keccak/Families': [],
+        'Advanced/Modern (bcrypt/scrypt/Argon/PBKDF2)': [],
+        'Database/Application': [],
+        'Network/Enterprise': [],
+        'Legacy/Other': []
+      };
+      
+      // Categorize algorithms
+      sortedAlgos.forEach(algo => {
+        const s = String(algo).toLowerCase();
+        if (s.includes('md') || s.includes('sha') || s.includes('ripemd')) {
+          categories['MD5/SHA Family'].push(algo);
+        } else if (s.includes('blake') || s.includes('keccak') || s.includes('sm3') || s.includes('whirlpool')) {
+          categories['BLAKE/Keccak/Families'].push(algo);
+        } else if (s.includes('bcrypt') || s.includes('scrypt') || s.includes('argon') || s.includes('pbkdf')) {
+          categories['Advanced/Modern (bcrypt/scrypt/Argon/PBKDF2)'].push(algo);
+        } else if (s.includes('mysql') || s.includes('postgres') || s.includes('oracle') || s.includes('mssql') || s.includes('mongodb')) {
+          categories['Database/Application'].push(algo);
+        } else if (s.includes('cisco') || s.includes('juniper') || s.includes('fortigate') || s.includes('huawei') || s.includes('ldap')) {
+          categories['Network/Enterprise'].push(algo);
+        } else {
+          categories['Legacy/Other'].push(algo);
+        }
+      });
+      
+      // Append each category with a styled header option and an optgroup at the top level
+      Object.entries(categories).forEach(([label, list]) => {
+        if (list.length === 0) return;
+        // Header row (disabled option) to visually separate groups
+        const header = document.createElement('option');
+        header.value = '';
+        header.disabled = true;
+        header.setAttribute('data-header', 'true');
+        header.textContent = `—— ${label} (${list.length}) ——`;
+        select.appendChild(header);
+        
+        const og = document.createElement('optgroup');
+        og.setAttribute('data-dynamic', 'true');
+        og.label = `${label} (${list.length})`;
+        list.forEach(name => {
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name;
+          og.appendChild(opt);
+        });
+        select.appendChild(og);
+      });
+    }
+    
+  } catch (error) {
+    console.error('Failed to load algorithms:', error);
+    showToast('Failed to load algorithm list', 'error');
+  }
+}
+
+// Method switching functionality
+function setupMethodSwitching() {
+  document.querySelectorAll('.method-card').forEach(card => {
+    card.addEventListener('click', function() {
+      const method = this.dataset.method;
+      if (!method) return;
+      
+      // Update visual selection
+      document.querySelectorAll('.method-card').forEach(c => c.classList.remove('selected'));
+      this.classList.add('selected');
+      
+      // Update hidden input
+      const modeInput = document.getElementById('mode');
+      if (modeInput) modeInput.value = method;
+      
+      // Show/hide method-specific configs
+      document.querySelectorAll('.method-config').forEach(config => {
+        config.style.display = 'none';
+      });
+      
+      const targetConfig = document.querySelector(`.method-config.mode-${method}`);
+      if (targetConfig) {
+        targetConfig.style.display = 'block';
+      }
+    });
+  });
+}
+
+// Auto-detection functionality
+function setupAutoDetection() {
+  const targetInput = document.getElementById('target');
+  const algoSelect = document.getElementById('algo');
+  const detectedInfo = document.getElementById('detectedInfo');
+  const detectedAlgos = document.getElementById('detectedAlgos');
+  
+  if (!targetInput || !algoSelect) return;
+  
+  let detectTimeout;
+  
+  targetInput.addEventListener('input', function() {
+    clearTimeout(detectTimeout);
+    
+    const hash = this.value.trim();
+    if (!hash) {
+      if (detectedInfo) detectedInfo.style.display = 'none';
+      return;
+    }
+    
+    // Debounce detection requests
+    detectTimeout = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/detect?target=${encodeURIComponent(hash)}`);
+        if (!res.ok) return;
+        
+  const data = await res.json();
+  const suggestions = data.suggestions || data.candidates || [];
+        
+        if (suggestions.length > 0 && detectedInfo && detectedAlgos) {
+          detectedAlgos.innerHTML = '';
+          suggestions.slice(0,6).forEach(name => {
+            const chip = document.createElement('span');
+            chip.className = 'algo-chip';
+            chip.innerHTML = `<i class="fas fa-lightbulb"></i>${name}`;
+            chip.addEventListener('click', () => {
+              const sel = document.getElementById('algo');
+              if (sel) {
+                sel.value = name;
+                sel.dispatchEvent(new Event('change'));
+              }
+            });
+            detectedAlgos.appendChild(chip);
+          });
+          detectedInfo.style.display = 'flex';
+        } else if (detectedInfo) {
+          detectedInfo.style.display = 'none';
+        }
+      } catch (error) {
+        console.error('Detection failed:', error);
+      }
+    }, 500);
+  });
+}
+
+// Enhanced DOMContentLoaded
+document.addEventListener('DOMContentLoaded', function() {
+  // Load algorithms first
+  loadAlgorithms();
+  // Algorithm search input removed by request; using categorized dropdown only
+  
+  // Setup method switching
+  setupMethodSwitching();
+  
+  // Setup auto-detection
+  setupAutoDetection();
+  
+  // Set up worker slider
+  const workerSlider = document.getElementById('workerSlider');
+  const workerValue = document.getElementById('workerValue');
+  if (workerSlider && workerValue) {
+    workerSlider.addEventListener('input', function() {
+      workerValue.textContent = this.value;
+    });
+  }
+  
+  // Set up complexity warning for brute force
+  const bfMinInput = document.querySelector('input[name="bf_min"]');
+  const bfMaxInput = document.querySelector('input[name="bf_max"]');
+  const bfCharsInput = document.querySelector('input[name="bf_chars"]');
+  const estimatedAttempts = document.getElementById('estimatedAttempts');
+  
+  function updateComplexity() {
+    if (!bfMinInput || !bfMaxInput || !bfCharsInput || !estimatedAttempts) return;
+    
+    const min = parseInt(bfMinInput.value) || 1;
+    const max = parseInt(bfMaxInput.value) || 1;
+    const chars = bfCharsInput.value.length || 1;
+    
+    let total = 0;
+    for (let len = min; len <= max; len++) {
+      total += Math.pow(chars, len);
+    }
+    
+    estimatedAttempts.textContent = formatNumber(total);
+  }
+  
+  if (bfMinInput) bfMinInput.addEventListener('input', updateComplexity);
+  if (bfMaxInput) bfMaxInput.addEventListener('input', updateComplexity);
+  if (bfCharsInput) bfCharsInput.addEventListener('input', updateComplexity);
+  
+  // Initialize method selection
+  const defaultMethodCard = document.querySelector('.method-card[data-method="wordlist"]');
+  if (defaultMethodCard) {
+    defaultMethodCard.click();
+  }
+  
+  // Existing code...
+  const taskForm = document.getElementById('taskForm');
+  if (taskForm) {
+    taskForm.addEventListener('submit', createTask);
+  }
+  
+  const cpuEl = document.getElementById('cpu-count');
+  const goroutinesEl = document.getElementById('goroutines');
+  const memoryEl = document.getElementById('memory');
+  
+  if (cpuEl) cpuEl.textContent = 'Loading...';
+  if (goroutinesEl) goroutinesEl.textContent = 'Loading...';
+  if (memoryEl) memoryEl.textContent = 'Loading...';
+  
+  // Check for saved tasks on load
+  loadTasks().then(() => {
+    const tasks = document.querySelectorAll('#tasks tbody tr');
+    if (tasks.length > 0) {
+      let hasPausedTasks = false;
+      tasks.forEach(tr => {
+        const statusBadge = tr.querySelector('.badge');
+        if (statusBadge && statusBadge.textContent.toLowerCase() === 'paused') {
+          hasPausedTasks = true;
+        }
+      });
+      
+      if (hasPausedTasks) {
+        showToast('Found paused tasks from previous session. Click play to resume.', 'info');
+      }
+    }
+  });
+  
+  Promise.all([
+    loadTasks().catch(err => console.error('Initial tasks load failed:', err)),
+    loadStats().catch(err => console.error('Initial stats load failed:', err))
+  ]).then(() => {
+    // Prefer SSE stream for tasks when available
+    try {
+      const es = new EventSource('/api/tasks/stream');
+      es.addEventListener('tasks', ev => {
+        try {
+          const data = JSON.parse(ev.data);
+          if (window.renderTasks) window.renderTasks(data);
+        } catch(e){}
+      });
+      es.onerror = () => {
+        // Fallback to polling if SSE fails
+        es.close();
+        setInterval(() => {
+          loadTasks().catch(err => console.error('Periodic tasks load failed:', err));
+        }, 2500);
+      };
+    } catch (e) {
+      setInterval(() => {
+        loadTasks().catch(err => console.error('Periodic tasks load failed:', err));
+      }, 2500);
+    }
+    
+    setInterval(() => {
+      loadStats().catch(err => console.error('Periodic stats load failed:', err));
+    }, 5000);
+  });
+});
+
+// Global utility functions
+window.nextStep = function(step) {
+  showStep(step);
+};
+
+window.prevStep = function(step) {
+  showStep(step);
+};
+
+window.setCharset = function(charset) {
+  const bfCharsInput = document.querySelector('input[name="bf_chars"]');
+  if (bfCharsInput) {
+    bfCharsInput.value = charset;
+    bfCharsInput.dispatchEvent(new Event('input'));
+  }
+};
+
+// Toggle advanced algorithm parameters
+window.toggleAdvancedParams = function() {
+  const content = document.getElementById('advanced-params');
+  const button = document.querySelector('.toggle-advanced');
+  const icon = button.querySelector('i');
+  
+  if (content.style.display === 'none') {
+    content.style.display = 'block';
+    button.innerHTML = '<i class="fas fa-chevron-up"></i> Hide Advanced Parameters';
+    button.classList.add('expanded');
+  } else {
+    content.style.display = 'none';
+    button.innerHTML = '<i class="fas fa-chevron-down"></i> Show Advanced Parameters';
+    button.classList.remove('expanded');
+  }
+};
+
 window.showStep = showStep;
