@@ -1,47 +1,36 @@
-<p align="center">
-  <!-- Replace with your logo file -->
-  <img src="docs/logo.png" alt="HashCrack Logo" width="auto" />
-</p>
+<div align="center">
 
-<p align="center">
-  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.23%2B-00ADD8?logo=go&logoColor=white" alt="Go 1.23+" /></a>
-  <img src="https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker ready" />
-  <img src="https://img.shields.io/badge/Compose-v3.8-2496ED?logo=docker&logoColor=white" alt="Docker Compose 3.8" />
-  <img src="https://img.shields.io/badge/Platform-linux%2Famd64-lightgrey" alt="Platform" />
-</p>
+# 🔓 HashCrack
 
-HashCrack is a Go‑based, CPU hash‑cracking toolkit with a Web UI and a simple CLI. It ships Docker‑first with a single `docker compose up` to run the web, and you run the CLI inside the same container.
+**A powerful, fast, and user-friendly hash cracking toolkit**
 
----
+[![Go](https://img.shields.io/badge/Go-1.23%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-## Table of contents
-- [Features](#features)
-- [Supported algorithms](#supported-algorithms)
-- [Attack Modes](#attack-modes)
-- [State Saving & Resume](#state-saving--resume)
-- [Quick start (docker compose)](#quick-start-docker-compose)
-- [Using the CLI (inside the container)](#using-the-cli-inside-the-container)
-- [Web UI](#web-ui)
-- [Project layout](#project-layout)
-- [API reference](#api-reference)
-- [Build from source (optional)](#build-from-source-optional-and-not-needed)
-- [Troubleshooting](#troubleshooting)
+<img src="docs/logo.png" alt="HashCrack Logo" width="300" />
+
+**HashCrack** is a Go-based, high-performance hash cracking toolkit featuring both a modern Web UI and CLI interface. Built with Docker-first architecture for seamless deployment and maximum portability.
+
+[Features](#-features) • [Quick Start](#-quick-start) • [Attack Modes](#-attack-modes) • [Web UI](#-web-ui) • [CLI Usage](#-cli-usage)
+
+</div>
 
 ---
 
-## Features
-- **Fast, concurrent cracking** with bounded worker pools for optimal performance
-- **Six powerful attack modes**: Dictionary, Mask, Brute Force, Combination, Hybrid, and Association attacks
-- **Real‑time progress monitoring** via Server-Sent Events with speed, ETA, and completion stats
-- **Persistent state saving** - automatically saves progress and resumes interrupted tasks
-- **Smart algorithm detection** with heuristics for unknown hashes
-- **Upload custom wordlists** (validated) or use the built‑in rockyou-mini sample
-- **Comprehensive CLI and Web UI** for both automated and interactive usage
-- **Docker‑first deployment** with single command setup
-- **Resume capability** - pick up where you left off after interruptions
-- **Task management** - pause, resume, stop, and delete tasks with full state persistence
+## 🚀 Features
 
-## Supported algorithms
+- **⚡ High Performance**: Multi-threaded cracking with optimized worker pools
+- **🎯 Six Attack Modes**: Dictionary, Mask, Brute Force, Combination, Hybrid, and Association
+- **📊 Real-time Monitoring**: Live progress tracking with speed, ETA, and completion stats
+- **💾 State Persistence**: Automatic progress saving and resumption of interrupted tasks
+- **🧠 Smart Detection**: Automatic algorithm identification with heuristics
+- **📁 Flexible Wordlists**: Upload custom wordlists or use built-in samples
+- **🌐 Dual Interface**: Modern Web UI and powerful CLI for all use cases
+- **🐳 Docker Ready**: One command deployment with Docker Compose
+- **⏯️ Task Management**: Pause, resume, stop, and delete tasks with full state persistence
+
+## 🛠️ Supported Algorithms
 
 <details>
 <summary>Full supported algorithms</summary>
@@ -258,85 +247,118 @@ Supported algorithms:
 
 </details>
 
-**Total supported: 200+ algorithms** including all major hash types, database authentication schemes, key derivation functions, and application-specific formats. Run `hashcrack list` to see the complete list.
+**200+ algorithms supported** including all major hash types, database authentication schemes, key derivation functions, and application-specific formats.
+
+<details>
+<summary>📋 View all supported algorithms</summary>
+
+- 3des, adobe-aem-sha256, adobe-aem-sha512, aes-128-ecb, aes-192-ecb, aes-256-ecb
+- apache-apr1-md5, argon2id, arubaos, authme-sha256, bcrypt, bcrypt-hmac-sha256-pass
+- bcrypt-md5-pass, bcrypt-sha1-pass, bcrypt-sha256-pass, bcrypt-sha512-pass
+- blake2b-256, blake2b-512, blake2s-256, chacha20, cisco, cisco-asa-md5
+- cisco-ios-pbkdf2-sha256, cisco-ios-scrypt, cisco-ios-type4-sha256, cisco-ise-sha256
+- cisco-pix-md5, cisco7, citrix-netscaler-pbkdf2, citrix-netscaler-sha1
+- citrix-netscaler-sha512, coldfusion-10, crc32, crc32c, crc64jones, dahua-md5
+- des, descrypt, dnssec-nsec3, domain-cached-credentials, domain-cached-credentials2
+- episerver-6x-net4, episerver-6x-net4-plus, filezilla-server, fortigate, fortigate256
+- md5, sha1, sha256, sha512, ntlm, mysql, oracle, postgresql, mssql, and many more...
+
+*Run `hashcrack list` for the complete list*
+
+</details>
 
 ---
 
-## Attack Modes
+## 🎯 Attack Modes
 
-HashCrack offers **six powerful attack modes** to crack different types of passwords:
+### 🔤 Dictionary Attack
+**Most effective for common passwords**
+- Uses wordlists containing common passwords
+- Supports custom wordlists (`.txt`/`.lst` files)
+- Built-in `rockyou-mini.txt` sample included
+- Rule-based transformations: `+c` (capitalize), `+d2` (append digits)
 
-### 1. Dictionary Attack (Wordlist)
-**Most common and effective method**
-- Uses predefined wordlists containing common passwords
-- Supports custom wordlists (`.txt`/`.lst` files, ≤10MB) 
-- Includes built-in `rockyou-mini.txt` sample
-- **Rule-based transformations**: `+c` (capitalize), `+d2` (append 2 digits), etc.
+### 🎭 Mask Attack  
+**Perfect when you know password patterns**
+- Pattern-based with placeholders: `?l?l?l?d?d` (3 letters + 2 digits)
+- `?l` lowercase, `?u` uppercase, `?d` digit, `?s` symbol
+- Highly efficient for structured passwords
 
-### 2. Mask Attack (Pattern-based)
-**Targeted approach when you know password structure**
-- Uses patterns with placeholders: `?l` (lowercase), `?u` (uppercase), `?d` (digit), `?s` (symbol)
-- Example: `?l?l?l?l?d?d` = 4 letters + 2 digits (e.g., "word12")
-
-### 3. Brute Force Attack
+### 🔄 Brute Force
 **Exhaustive search through all combinations**
-- Tries all possible character combinations within specified length range
-- **Warning**: Exponentially slow - use short lengths only (1-6 chars recommended)
+- Tries all possible character combinations
+- Best for short passwords (1-6 characters)
+- ⚠️ Exponentially slow for longer passwords
 
-### 4. Combination Attack
-**Combines words from two different wordlists**
-- Concatenates entries from two wordlists with optional separator
-- Examples: first_name + last_name, word1 + word2
+### 🔗 Combination Attack
+**Merges two wordlists**
+- Concatenates entries from two wordlists
+- Optional separator support
+- Great for firstname+lastname patterns
 
-### 5. Hybrid Attack
-**Combines wordlist entries with mask patterns**
-- Two modes: Wordlist + Mask or Mask + Wordlist
-- Example: Dictionary word followed by pattern (e.g., "password123")
+### ⚡ Hybrid Attack
+**Wordlist + Pattern combination**
+- Two modes: Wordlist+Mask or Mask+Wordlist
+- Combines dictionary words with patterns
+- Example: "password" + "123"
 
-### 6. Association Attack
-**Generates candidates based on contextual information**
-- Uses context clues like username, email, filename, company name
-- Generates variations, combinations, common transformations
+### 🧠 Association Attack
+**Context-aware password generation**
+- Uses personal information (username, email, company)
+- Generates common variations and transformations
+- Effective against personalized passwords
 
 ---
 
-## State Saving & Resume
+## 💾 State Persistence
 
-HashCrack features **automatic state persistence** for long-running operations:
+**Automatic state saving and resumption for long-running tasks**
 
-- **Automatic checkpoints**: Progress saved every few seconds during execution
-- **Resume capability**: Pick up exactly where you left off after interruptions
-- **Cross-session recovery**: Tasks survive container restarts and system reboots
-- **Task management**: Pause, resume, stop, and delete tasks via Web UI
-- **State files**: Human-readable JSON format in `states/` directory
+- ✅ **Automatic checkpoints**: Progress saved every few seconds
+- ✅ **Resume capability**: Continue exactly where you left off
+- ✅ **Cross-session recovery**: Survives container restarts and system reboots
+- ✅ **Task management**: Pause, resume, stop, and delete via Web UI
+- ✅ **JSON state files**: Human-readable format in `states/` directory
 
 ### What Gets Saved
 - Progress tracking (attempts tried, current position)
-- Task configuration (algorithm, target, parameters)
+- Task configuration (algorithm, target, parameters)  
 - Timing information (runtime, pause/resume timestamps)
 - Resume data (exact position to continue from)
 
-### Resume Scenarios
-- Manual pause → Click "Resume" in Web UI
-- Browser closed → Refresh page, task continues in background
-- Container restart → Tasks appear as resumable after restart
-- System crash → Last checkpoint recovered automatically
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+- Docker & Docker Compose
+- Git (to clone the repository)
+
+### 1. Clone and Start
+```bash
+git clone <repository-url>
+cd hashcrack-main
+docker compose up --build -d
+```
+
+### 2. Access the Web UI
+Open your browser and navigate to:
+```
+http://localhost:8080
+```
+
+### 3. Start Cracking!
+1. 📝 Enter your hash
+2. 🎯 Choose an attack mode  
+3. ⚙️ Configure parameters
+4. ▶️ Click "Start Attack"
+5. 📊 Watch real-time progress
+
+That's it! 🎉
 
 ---
 
-## Quick start (docker compose)
-
-> This repo includes `docker-compose.yml`. Compose builds the image, maps port 8080, and mounts the repo at `/data` inside the container.
-
-```powershell
-docker compose up --build -d
-
-# Tail logs (optional)
-docker compose logs -f hashcrack
-
-# Open the web UI
-# http://localhost:8080
-```
+## 🖥️ CLI Usage
 
 - Volume: the current repo is mounted at `/data` in the container.
 - Uploads: saved under `uploads/` in your repo.
@@ -434,7 +456,7 @@ docker compose exec hashcrack hashcrack association -a md5 -h $hash \
    - **State Persistence**: Automatic progress saving and recovery
 
 5. **File Management**:
-   - Upload custom wordlists (`.txt`/`.lst`, ≤10MB)
+   - Upload custom wordlists (`.txt`/`.lst` files)
    - Built-in `rockyou-mini.txt` sample included
    - Automatic file validation and format checking
 
@@ -556,7 +578,7 @@ Environment overrides (via Viper): `HASHCRACK_WORKERS`, `HASHCRACK_LOG`, etc.
 
 ## Troubleshooting
 - Default wordlist: the UI references `testdata/rockyou-mini.txt` included in this repository.
-- Uploads: `.txt`/`.lst`, <=10MB. Binary content is rejected.
+- Uploads: `.txt`/`.lst` files supported. Binary content is rejected.
 - Paths: inside the container the repo is `/data`; use relative paths like `uploads/...`.
 - Compose lifecycle: `docker compose down` to stop; `docker compose logs -f` to follow logs.
 

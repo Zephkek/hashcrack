@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"runtime"
 	"strings"
@@ -94,10 +95,37 @@ func (c *Cracker) CrackWordlistResumable(ctx context.Context, h hashes.Hasher, p
 	}
 	defer f.Close()
 
+	// Count total lines in wordlist for progress tracking
+	totalLines, err := c.countLines(wordlistPath)
+	if err != nil {
+		return res, fmt.Errorf("failed to count wordlist lines: %w", err)
+	}
+
+	// Calculate actual total combinations including rule transformations
+	totalCombinations := totalLines
+	if c.opts.Transform != nil {
+		// Estimate transformation multiplier based on typical rules
+		// This provides better progress tracking for dictionary attacks with rules
+		sample := "password"
+		transforms := c.opts.Transform(sample)
+		if len(transforms) > 1 {
+			totalCombinations = totalLines * uint64(len(transforms))
+		}
+	}
+
 	workers := c.opts.Workers
 	if workers <= 0 { workers = runtime.NumCPU() * 2 }
 	if workers > runtime.NumCPU() * 4 { workers = runtime.NumCPU() * 4 }
-	c.logEvent("start", map[string]any{"workers": workers, "algo": h.Name(), "wordlist": wordlistPath, "resume_line": resumeOpts.StartLine})
+	
+	// Send total_combinations for proper progress bar updates
+	c.logEvent("start", map[string]any{
+		"workers": workers, 
+		"algo": h.Name(), 
+		"wordlist": wordlistPath, 
+		"resume_line": resumeOpts.StartLine, 
+		"total_combinations": totalCombinations,
+		"total_lines": totalLines,
+	})
 
 	target = strings.TrimSpace(target)
 	var targetDigest []byte
@@ -117,9 +145,8 @@ func (c *Cracker) CrackWordlistResumable(ctx context.Context, h hashes.Hasher, p
 	var plaintext atomic.Value
 	var currentLine int64
 
-	// We will use a single scanner below and skip to StartLine once
-
-	workChan := make(chan workItem, workers*8)
+	// Optimized work channel with larger buffer for better throughput
+	workChan := make(chan workItem, workers*16)
 	
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
@@ -150,9 +177,12 @@ func (c *Cracker) CrackWordlistResumable(ctx context.Context, h hashes.Hasher, p
 						}
 					}
 					
+					// Batch processing optimization for better performance
 					if bbd, ok := h.(hashes.BatchByteDigester); ok && len(candidates) >= 4 && byteDigester != nil && len(targetDigest) > 0 {
 						batch := make([][]byte, 0, len(candidates))
-						for _, cnd := range candidates { batch = append(batch, []byte(cnd)) }
+						for _, cnd := range candidates { 
+							batch = append(batch, []byte(cnd)) 
+						}
 						sums, _ := bbd.DigestMany(batch, p)
 						for i, sum := range sums {
 							if found.Load() { break }
@@ -167,13 +197,18 @@ func (c *Cracker) CrackWordlistResumable(ctx context.Context, h hashes.Hasher, p
 								return
 							}
 						}
-						if localTried%1000 == 0 {
-							globalCount := atomic.AddUint64(&tried, 1000)
+						// Optimized progress reporting interval
+						if localTried%2000 == 0 {
+							globalCount := atomic.AddUint64(&tried, 2000)
 							localTried = 0
-							every := c.opts.ProgressEvery; if every == 0 { every = 5000 }
+							every := c.opts.ProgressEvery
+							if every == 0 { every = 5000 }
 							if globalCount%every == 0 { 
-								c.logEvent("progress", map[string]any{"tried": globalCount, "line": work.line})
-								// Call checkpoint function if provided
+								c.logEvent("progress", map[string]any{
+									"tried": globalCount, 
+									"line": work.line,
+									"total": totalCombinations,
+								})
 								if resumeOpts.CheckpointFunc != nil {
 									resumeOpts.CheckpointFunc(work.line)
 								}
@@ -181,6 +216,7 @@ func (c *Cracker) CrackWordlistResumable(ctx context.Context, h hashes.Hasher, p
 						}
 						continue
 					}
+					
 					for _, cand := range candidates {
 						if found.Load() { 
 							break 
@@ -208,8 +244,9 @@ func (c *Cracker) CrackWordlistResumable(ctx context.Context, h hashes.Hasher, p
 							return
 						}
 						
-						if localTried%1000 == 0 {
-							globalCount := atomic.AddUint64(&tried, 1000)
+						// Optimized progress reporting
+						if localTried%2000 == 0 {
+							globalCount := atomic.AddUint64(&tried, 2000)
 							localTried = 0 
 							
 							every := c.opts.ProgressEvery
@@ -219,8 +256,8 @@ func (c *Cracker) CrackWordlistResumable(ctx context.Context, h hashes.Hasher, p
 									"tried": globalCount,
 									"candidate": cand,
 									"line": work.line,
+									"total": totalCombinations,
 								})
-								// Call checkpoint function if provided
 								if resumeOpts.CheckpointFunc != nil {
 									resumeOpts.CheckpointFunc(work.line)
 								}
@@ -232,9 +269,10 @@ func (c *Cracker) CrackWordlistResumable(ctx context.Context, h hashes.Hasher, p
 		}()
 	}
 
+	// Optimized scanner with larger buffer
 	scanner := bufio.NewScanner(f)
-	buf := make([]byte, 0, 2*1024*1024)
-	scanner.Buffer(buf, 2*1024*1024)
+	buf := make([]byte, 0, 4*1024*1024) // 4MB buffer for better I/O performance
+	scanner.Buffer(buf, 4*1024*1024)
 	
 	// Skip to resume point
 	if resumeOpts.StartLine > 0 {
@@ -284,6 +322,35 @@ func (c *Cracker) CrackWordlistResumable(ctx context.Context, h hashes.Hasher, p
 		"duration_ms": res.Duration.Milliseconds(),
 	})
 	return res, nil
+}
+
+// countLines efficiently counts the number of lines in a file
+func (c *Cracker) countLines(filename string) (uint64, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+
+	// Use larger buffer for faster line counting
+	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 0, 1024*1024) // 1MB buffer
+	scanner.Buffer(buf, 1024*1024)
+	
+	var count uint64 = 0
+	
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" { // Only count non-empty lines
+			count++
+		}
+	}
+	
+	if err := scanner.Err(); err != nil {
+		return 0, err
+	}
+	
+	return count, nil
 }
 
 type workItem struct {

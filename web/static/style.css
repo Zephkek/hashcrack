@@ -1318,6 +1318,25 @@ select.form-select option[data-header] {
   margin-right: 6px;
 }
 
+/* Cached wordlist indicator */
+.cached-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--success-color);
+  background: rgba(16, 185, 129, 0.1);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.cached-indicator::before {
+  content: '\f0c7'; /* save icon */
+  font-family: 'Font Awesome 6 Free';
+  font-weight: 900;
+}
+
 .progress-info.enhanced {
   flex-direction: column;
   align-items: stretch;

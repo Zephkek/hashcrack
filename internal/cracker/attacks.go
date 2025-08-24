@@ -4,23 +4,13 @@ import (
 	"bufio"
 	"context"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"edu/hashcrack/internal/hashes"
-)
-
-type AttackMode int
-
-const (
-	Straight AttackMode = iota
-	Combination
-	BruteForce
-	HybridDictMask
-	HybridMaskDict
-	Association
 )
 
 type CombinationOptions struct {
@@ -32,7 +22,7 @@ type CombinationOptions struct {
 type HybridOptions struct {
 	Wordlist string
 	Mask     string
-	IsPrefix bool
+	IsPrefix bool // If true, mask+word. If false, word+mask
 }
 
 type AssociationOptions struct {
@@ -46,33 +36,43 @@ func (c *Cracker) CrackCombination(ctx context.Context, h hashes.Hasher, p hashe
 	start := time.Now()
 	res := Result{}
 
-	f1, err := os.Open(opts.Wordlist1)
+	// Optimized file reading with larger buffers
+	words1, err := c.readWordlistOptimized(opts.Wordlist1)
 	if err != nil { return res, err }
-	defer f1.Close()
-
-	f2, err := os.Open(opts.Wordlist2)
+	
+	words2, err := c.readWordlistOptimized(opts.Wordlist2)
 	if err != nil { return res, err }
-	defer f2.Close()
 
-	words1 := []string{}
-	scanner1 := bufio.NewScanner(f1)
-	for scanner1.Scan() {
-		words1 = append(words1, strings.TrimSpace(scanner1.Text()))
+	c.logEvent("wordlist_loaded", map[string]any{
+		"wordlist1_count": len(words1),
+		"wordlist2_count": len(words2),
+		"wordlist1_path": opts.Wordlist1,
+		"wordlist2_path": opts.Wordlist2,
+	})
+
+	totalCombinations := uint64(len(words1)) * uint64(len(words2))
+	
+	// Warn about extremely large combination attacks
+	if totalCombinations > 100000000 { // 100 million
+		c.logEvent("warning", map[string]any{
+			"message": "Very large combination attack detected",
+			"total_combinations": totalCombinations,
+			"wordlist1_size": len(words1),
+			"wordlist2_size": len(words2),
+			"estimated_time": "This may take an extremely long time to complete",
+		})
 	}
-
-	words2 := []string{}
-	scanner2 := bufio.NewScanner(f2)
-	for scanner2.Scan() {
-		words2 = append(words2, strings.TrimSpace(scanner2.Text()))
-	}
-
+	
 	workers := c.opts.Workers
-	if workers <= 0 { workers = 8 }
+	if workers <= 0 { workers = runtime.NumCPU() * 2 }
+	if workers > runtime.NumCPU() * 4 { workers = runtime.NumCPU() * 4 }
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	workChan := make(chan string, 1000)
+	// Optimized work channel with larger buffer
+	workChan := make(chan string, workers*32)
+	
 	var found atomic.Bool
 	var plaintext atomic.Value
 	var tried uint64
@@ -84,6 +84,7 @@ func (c *Cracker) CrackCombination(ctx context.Context, h hashes.Hasher, p hashe
 		"wordlist1": opts.Wordlist1,
 		"wordlist2": opts.Wordlist2,
 		"separator": opts.Separator,
+		"total_combinations": totalCombinations,
 	})
 
 	for i := 0; i < workers; i++ {
@@ -108,8 +109,9 @@ func (c *Cracker) CrackCombination(ctx context.Context, h hashes.Hasher, p hashe
 					return
 				}
 				
-				if localTried%1000 == 0 {
-					globalCount := atomic.AddUint64(&tried, 1000)
+				// Optimized progress reporting
+				if localTried%5000 == 0 {
+					globalCount := atomic.AddUint64(&tried, 5000)
 					localTried = 0
 					
 					every := c.opts.ProgressEvery
@@ -118,6 +120,7 @@ func (c *Cracker) CrackCombination(ctx context.Context, h hashes.Hasher, p hashe
 						c.logEvent("progress", map[string]any{
 							"tried": globalCount,
 							"candidate": cand,
+							"total": totalCombinations,
 						})
 					}
 				}
@@ -164,25 +167,28 @@ func (c *Cracker) CrackHybrid(ctx context.Context, h hashes.Hasher, p hashes.Par
 	start := time.Now()
 	res := Result{}
 
-	f, err := os.Open(opts.Wordlist)
+	// Optimized wordlist reading
+	words, err := c.readWordlistOptimized(opts.Wordlist)
 	if err != nil { return res, err }
-	defer f.Close()
-
-	words := []string{}
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		words = append(words, strings.TrimSpace(scanner.Text()))
-	}
 
 	maskChars := c.generateMaskChars(opts.Mask)
 	
+	// Calculate total combinations (words * mask combinations)
+	maskCombinations := uint64(1)
+	for _, chars := range maskChars {
+		maskCombinations *= uint64(len(chars))
+	}
+	totalCombinations := uint64(len(words)) * maskCombinations
+	
 	workers := c.opts.Workers
-	if workers <= 0 { workers = 8 }
+	if workers <= 0 { workers = runtime.NumCPU() * 2 }
+	if workers > runtime.NumCPU() * 4 { workers = runtime.NumCPU() * 4 }
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	workChan := make(chan string, 1000)
+	// Optimized work channel
+	workChan := make(chan string, workers*32)
 	var found atomic.Bool
 	var plaintext atomic.Value
 	var tried uint64
@@ -194,6 +200,7 @@ func (c *Cracker) CrackHybrid(ctx context.Context, h hashes.Hasher, p hashes.Par
 		"wordlist": opts.Wordlist,
 		"mask": opts.Mask,
 		"is_prefix": opts.IsPrefix,
+		"total_combinations": totalCombinations,
 	})
 
 	for i := 0; i < workers; i++ {
@@ -218,8 +225,9 @@ func (c *Cracker) CrackHybrid(ctx context.Context, h hashes.Hasher, p hashes.Par
 					return
 				}
 				
-				if localTried%1000 == 0 {
-					globalCount := atomic.AddUint64(&tried, 1000)
+				// Optimized progress reporting
+				if localTried%5000 == 0 {
+					globalCount := atomic.AddUint64(&tried, 5000)
 					localTried = 0
 					
 					every := c.opts.ProgressEvery
@@ -228,6 +236,7 @@ func (c *Cracker) CrackHybrid(ctx context.Context, h hashes.Hasher, p hashes.Par
 						c.logEvent("progress", map[string]any{
 							"tried": globalCount,
 							"candidate": cand,
+							"total": totalCombinations,
 						})
 					}
 				}
@@ -266,12 +275,11 @@ func (c *Cracker) CrackAssociation(ctx context.Context, h hashes.Hasher, p hashe
 	res := Result{}
 
 	candidates := c.generateAssociationCandidates(opts)
-	
-	workers := c.opts.Workers
-	if workers <= 0 { workers = 8 }
+	totalCandidates := uint64(len(candidates))
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	workers := c.opts.Workers
+	if workers <= 0 { workers = runtime.NumCPU() }
+	if workers > runtime.NumCPU() * 2 { workers = runtime.NumCPU() * 2 }
 
 	workChan := make(chan string, 1000)
 	var found atomic.Bool
@@ -283,9 +291,7 @@ func (c *Cracker) CrackAssociation(ctx context.Context, h hashes.Hasher, p hashe
 		"mode": "association",
 		"workers": workers,
 		"username": opts.Username,
-		"hint": opts.Hint,
-		"filename": opts.Filename,
-		"candidates": len(candidates),
+		"total_combinations": totalCandidates,
 	})
 
 	for i := 0; i < workers; i++ {
@@ -300,7 +306,6 @@ func (c *Cracker) CrackAssociation(ctx context.Context, h hashes.Hasher, p hashe
 				if match, _ := h.Compare(target, cand, p); match {
 					plaintext.Store(cand)
 					found.Store(true)
-					cancel()
 					
 					globalCount := atomic.AddUint64(&tried, localTried)
 					c.logEvent("found", map[string]any{
@@ -310,16 +315,17 @@ func (c *Cracker) CrackAssociation(ctx context.Context, h hashes.Hasher, p hashe
 					return
 				}
 				
-				if localTried%100 == 0 {
-					globalCount := atomic.AddUint64(&tried, 100)
+				if localTried%1000 == 0 {
+					globalCount := atomic.AddUint64(&tried, 1000)
 					localTried = 0
 					
 					every := c.opts.ProgressEvery
-					if every == 0 { every = 1000 }
+					if every == 0 { every = 5000 }
 					if globalCount%every == 0 {
 						c.logEvent("progress", map[string]any{
 							"tried": globalCount,
 							"candidate": cand,
+							"total": totalCandidates,
 						})
 					}
 				}
@@ -357,117 +363,169 @@ func (c *Cracker) CrackAssociation(ctx context.Context, h hashes.Hasher, p hashe
 	return res, nil
 }
 
-func (c *Cracker) generateMaskChars(mask string) [][]rune {
-	chars := [][]rune{}
-	runes := []rune(mask)
+// Optimized wordlist reading with larger buffer
+func (c *Cracker) readWordlistOptimized(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil { return nil, err }
+	defer f.Close()
+
+	words := []string{}
+	scanner := bufio.NewScanner(f)
 	
-	for i := 0; i < len(runes); {
-		if runes[i] == '?' && i+1 < len(runes) {
-			switch runes[i+1] {
-			case 'l':
-				chars = append(chars, []rune("abcdefghijklmnopqrstuvwxyz"))
-			case 'u':
-				chars = append(chars, []rune("ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
-			case 'd':
-				chars = append(chars, []rune("0123456789"))
-			case 's':
-				chars = append(chars, []rune("!@#$%^&*()-_=+[]{};:'\",.<>/?|`~"))
-			}
-			i += 2
-		} else {
-			chars = append(chars, []rune{runes[i]})
-			i++
+	// Use larger buffer for better I/O performance
+	buf := make([]byte, 0, 2*1024*1024) // 2MB buffer
+	scanner.Buffer(buf, 2*1024*1024)
+	
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" {
+			words = append(words, line)
 		}
 	}
 	
-	return chars
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	
+	return words, nil
 }
 
-func (c *Cracker) generateHybridCandidates(word string, maskChars [][]rune, isPrefix bool, workChan chan<- string, ctx context.Context) {
-	total := 1
-	for _, chars := range maskChars {
-		total *= len(chars)
-	}
-	
-	for i := 0; i < total; i++ {
-		if ctx.Err() != nil { return }
-		
-		maskPart := ""
-		temp := i
-		for _, chars := range maskChars {
-			maskPart = string(chars[temp%len(chars)]) + maskPart
-			temp /= len(chars)
+func (c *Cracker) generateMaskChars(mask string) []string {
+	var result []string
+	for i := 0; i < len(mask); i++ {
+		if i+1 < len(mask) && mask[i] == '?' {
+			switch mask[i+1] {
+			case 'l':
+				result = append(result, "abcdefghijklmnopqrstuvwxyz")
+				i++
+			case 'u':
+				result = append(result, "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+				i++
+			case 'd':
+				result = append(result, "0123456789")
+				i++
+			case 's':
+				result = append(result, " !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
+				i++
+			case 'a':
+				result = append(result, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
+				i++
+			default:
+				result = append(result, string(mask[i+1]))
+				i++
+			}
+		} else {
+			result = append(result, string(mask[i]))
 		}
-		
+	}
+	return result
+}
+
+func (c *Cracker) generateHybridCandidates(word string, maskChars []string, isPrefix bool, out chan<- string, ctx context.Context) {
+	c.generateHybridRecursive(word, maskChars, 0, "", isPrefix, out, ctx)
+}
+
+func (c *Cracker) generateHybridRecursive(word string, maskChars []string, index int, current string, isPrefix bool, out chan<- string, ctx context.Context) {
+	if index == len(maskChars) {
 		var candidate string
 		if isPrefix {
-			candidate = maskPart + word
+			candidate = current + word
 		} else {
-			candidate = word + maskPart
+			candidate = word + current
 		}
-		
 		select {
-		case workChan <- candidate:
+		case out <- candidate:
 		case <-ctx.Done():
 			return
 		}
+		return
+	}
+	
+	for _, char := range maskChars[index] {
+		c.generateHybridRecursive(word, maskChars, index+1, current+string(char), isPrefix, out, ctx)
 	}
 }
 
 func (c *Cracker) generateAssociationCandidates(opts AssociationOptions) []string {
 	candidates := []string{}
 	
-	base := []string{}
-	if opts.Username != "" { base = append(base, opts.Username) }
-	if opts.Hint != "" { base = append(base, opts.Hint) }
-	if opts.Filename != "" { base = append(base, opts.Filename) }
-	if opts.BaseInfo != "" { base = append(base, opts.BaseInfo) }
-	
-	years := []string{"2024", "2023", "2022", "2021", "2020", "123", "1234", "12345"}
-	numbers := []string{"", "1", "12", "123", "1234", "01", "001"}
-	symbols := []string{"", "!", "@", "#", "$", "!@", "123", "321"}
-	
-	for _, b := range base {
-		candidates = append(candidates, b)
-		candidates = append(candidates, strings.ToLower(b))
-		candidates = append(candidates, strings.ToUpper(b))
-		candidates = append(candidates, strings.Title(b))
+	if opts.Username != "" {
+		// Basic username variations
+		candidates = append(candidates, opts.Username)
+		candidates = append(candidates, strings.ToLower(opts.Username))
+		candidates = append(candidates, strings.ToUpper(opts.Username))
+		candidates = append(candidates, strings.Title(opts.Username))
 		
-		for _, y := range years {
-			candidates = append(candidates, b+y)
-			candidates = append(candidates, y+b)
-			candidates = append(candidates, strings.ToLower(b)+y)
-			candidates = append(candidates, strings.ToUpper(b)+y)
+		// Username with common suffixes
+		for _, suffix := range []string{"", "1", "12", "123", "1234", "!", "@", "#", "2024", "2025", "99", "00", "01"} {
+			candidates = append(candidates, opts.Username+suffix)
+			candidates = append(candidates, strings.ToLower(opts.Username)+suffix)
+			candidates = append(candidates, strings.ToUpper(opts.Username)+suffix)
 		}
 		
-		for _, n := range numbers {
-			candidates = append(candidates, b+n)
-			candidates = append(candidates, n+b)
+		// Username with common prefixes
+		for _, prefix := range []string{"admin", "user", "test", "demo"} {
+			candidates = append(candidates, prefix+opts.Username)
+			candidates = append(candidates, prefix+strings.Title(opts.Username))
 		}
-		
-		for _, s := range symbols {
-			candidates = append(candidates, b+s)
-			candidates = append(candidates, s+b)
-		}
-		
-		candidates = append(candidates, b+b)
-		candidates = append(candidates, strings.Repeat(b, 2))
-		candidates = append(candidates, strings.Repeat(b, 3))
 	}
 	
-	return c.removeDuplicates(candidates)
-}
-
-func (c *Cracker) removeDuplicates(slice []string) []string {
+	// Parse email/hint for additional context
+	if opts.Hint != "" {
+		parts := strings.Split(opts.Hint, "@")
+		if len(parts) > 0 {
+			localPart := parts[0]
+			candidates = append(candidates, localPart)
+			candidates = append(candidates, strings.ToLower(localPart))
+			
+			// Common email-based passwords
+			for _, suffix := range []string{"123", "!", "@", "2024", "2025"} {
+				candidates = append(candidates, localPart+suffix)
+			}
+		}
+		
+		// Use domain name if present
+		if len(parts) > 1 {
+			domain := strings.Split(parts[1], ".")[0]
+			candidates = append(candidates, domain)
+			candidates = append(candidates, strings.Title(domain))
+			candidates = append(candidates, domain+"123")
+		}
+	}
+	
+	// Common passwords based on context
+	commonPasswords := []string{
+		"password", "Password", "Password1", "Password123",
+		"admin", "Admin", "Admin123",
+		"qwerty", "123456", "12345678",
+		"letmein", "welcome", "Welcome1",
+		"changeme", "test", "demo",
+	}
+	
+	if opts.BaseInfo != "" {
+		// Add company/base info variations
+		candidates = append(candidates, opts.BaseInfo)
+		candidates = append(candidates, strings.ToLower(opts.BaseInfo))
+		candidates = append(candidates, strings.ToUpper(opts.BaseInfo))
+		candidates = append(candidates, strings.Title(opts.BaseInfo))
+		
+		for _, suffix := range []string{"123", "!", "@", "2024", "2025"} {
+			candidates = append(candidates, opts.BaseInfo+suffix)
+			candidates = append(candidates, strings.Title(opts.BaseInfo)+suffix)
+		}
+	}
+	
+	candidates = append(candidates, commonPasswords...)
+	
+	// Remove duplicates
 	seen := make(map[string]bool)
-	result := []string{}
-	
-	for _, v := range slice {
-		if !seen[v] && v != "" {
-			seen[v] = true
-			result = append(result, v)
+	unique := []string{}
+	for _, c := range candidates {
+		if !seen[c] {
+			seen[c] = true
+			unique = append(unique, c)
 		}
 	}
 	
-	return result
+	return unique
 }

@@ -78,6 +78,12 @@ type Task struct {
 	
 	IsPaused         bool          `json:"is_paused"`
 	LastCheckpoint   time.Time     `json:"last_checkpoint,omitempty"`
+	
+	// Cache wordlist path to avoid re-downloading on resume
+	CachedWordlistPath string       `json:"-"` // Don't include in JSON
+	CachedHybridWordlistPath string `json:"-"` // For hybrid attacks
+	CachedCombWordlist1Path string  `json:"-"` // For combination attacks
+	CachedCombWordlist2Path string  `json:"-"` // For combination attacks
 	WordlistLine     int64         `json:"wordlist_line,omitempty"`
 	BruteforceIndex  uint64        `json:"bruteforce_index,omitempty"`
 	MaskIndex        uint64        `json:"mask_index,omitempty"`
@@ -504,6 +510,8 @@ func (m *Manager) ResumeTask(taskID string) error {
 	
 	task.Status = "running"
 	task.IsPaused = false
+	// Clear any download status that might be lingering from previous runs
+	task.Download = nil
 	m.mu.Unlock()
 	
 
@@ -1436,22 +1444,49 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 		// Handle wordlist source
 		if strings.TrimSpace(t.HybridWordlistURL) != "" {
 			log.Printf("Using hybrid URL wordlist: %s", t.HybridWordlistURL)
-			tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.HybridWordlistURL))
-			if err != nil {
-				t.Status = "error"
-				eventMu.Lock()
-				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Failed to download hybrid wordlist from URL: %v", err)})
-				eventMu.Unlock()
-				return
-			}
-			wl = tempFile
-			// resume running state after download
-			t.Status = "running"
-			defer func() {
-				if err := os.Remove(tempFile); err != nil {
-					log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
+			// Check if we have a cached wordlist path from a previous run (resume case)
+			if t.CachedHybridWordlistPath != "" {
+				// Verify the cached file still exists
+				if _, err := os.Stat(t.CachedHybridWordlistPath); err == nil {
+					wl = t.CachedHybridWordlistPath
+					log.Printf("Using cached hybrid wordlist from previous run: %s", wl)
+					// Log cache usage event for UI
+					eventMu.Lock()
+					t.Events = append(t.Events, map[string]any{
+						"event": "cache_used",
+						"message": "Using cached hybrid wordlist from previous run",
+						"wordlist_type": "hybrid",
+					})
+					eventMu.Unlock()
+				} else {
+					// Cached file doesn't exist, clear the cache and download again
+					t.CachedHybridWordlistPath = ""
 				}
-			}()
+			}
+			
+			// Download if we don't have a valid cached wordlist
+			if t.CachedHybridWordlistPath == "" {
+				tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.HybridWordlistURL))
+				if err != nil {
+					t.Status = "error"
+					eventMu.Lock()
+					t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Failed to download hybrid wordlist from URL: %v", err)})
+					eventMu.Unlock()
+					return
+				}
+				wl = tempFile
+				t.CachedHybridWordlistPath = tempFile // Cache the path for potential resume
+				
+				defer func() {
+					if err := os.Remove(tempFile); err != nil {
+						log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
+					}
+					// Clear cache when file is cleaned up
+					t.CachedHybridWordlistPath = ""
+				}()
+			}
+			// resume running state after download/cache check
+			t.Status = "running"
 		} else if t.UseDefaultWordlist {
 			wl = "testdata/rockyou-mini.txt"
 			log.Printf("Using default wordlist: %s", wl)
@@ -1464,22 +1499,49 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 			}
 		} else if strings.TrimSpace(t.WordlistURL) != "" {
 			log.Printf("Using URL wordlist: %s", t.WordlistURL)
-			tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.WordlistURL))
-			if err != nil {
-				t.Status = "error"
-				eventMu.Lock()
-				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Failed to download wordlist from URL: %v", err)})
-				eventMu.Unlock()
-				return
-			}
-			wl = tempFile
-			// resume running state after download
-			t.Status = "running"
-			defer func() {
-				if err := os.Remove(tempFile); err != nil {
-					log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
+			// Check if we have a cached wordlist path from a previous run (resume case)
+			if t.CachedWordlistPath != "" {
+				// Verify the cached file still exists
+				if _, err := os.Stat(t.CachedWordlistPath); err == nil {
+					wl = t.CachedWordlistPath
+					log.Printf("Using cached wordlist from previous run: %s", wl)
+					// Log cache usage event for UI
+					eventMu.Lock()
+					t.Events = append(t.Events, map[string]any{
+						"event": "cache_used",
+						"message": "Using cached wordlist from previous run",
+						"wordlist_type": "hybrid_main",
+					})
+					eventMu.Unlock()
+				} else {
+					// Cached file doesn't exist, clear the cache and download again
+					t.CachedWordlistPath = ""
 				}
-			}()
+			}
+			
+			// Download if we don't have a valid cached wordlist
+			if t.CachedWordlistPath == "" {
+				tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.WordlistURL))
+				if err != nil {
+					t.Status = "error"
+					eventMu.Lock()
+					t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Failed to download wordlist from URL: %v", err)})
+					eventMu.Unlock()
+					return
+				}
+				wl = tempFile
+				t.CachedWordlistPath = tempFile // Cache the path for potential resume
+				
+				defer func() {
+					if err := os.Remove(tempFile); err != nil {
+						log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
+					}
+					// Clear cache when file is cleaned up
+					t.CachedWordlistPath = ""
+				}()
+			}
+			// resume running state after download/cache check
+			t.Status = "running"
 		} else {
 			wl = strings.TrimSpace(t.Wordlist)
 			log.Printf("Using uploaded wordlist: %s", wl)
@@ -1535,22 +1597,49 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 		// Handle first wordlist
 		if strings.TrimSpace(t.Wordlist1URL) != "" {
 			log.Printf("Using URL for first wordlist: %s", t.Wordlist1URL)
-			tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.Wordlist1URL))
-			if err != nil {
-				t.Status = "error"
-				eventMu.Lock()
-				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Failed to download first wordlist from URL: %v", err)})
-				eventMu.Unlock()
-				return
+			// Check if we have a cached wordlist path from a previous run (resume case)
+			if t.CachedCombWordlist1Path != "" {
+				// Verify the cached file still exists
+				if _, err := os.Stat(t.CachedCombWordlist1Path); err == nil {
+					wl1 = t.CachedCombWordlist1Path
+					log.Printf("Using cached first wordlist from previous run: %s", wl1)
+					// Log cache usage event for UI
+					eventMu.Lock()
+					t.Events = append(t.Events, map[string]any{
+						"event": "cache_used",
+						"message": "Using cached first wordlist from previous run",
+						"wordlist_type": "combination1",
+					})
+					eventMu.Unlock()
+				} else {
+					// Cached file doesn't exist, clear the cache and download again
+					t.CachedCombWordlist1Path = ""
+				}
 			}
-			wl1 = tempFile
+			
+			// Download if we don't have a valid cached wordlist
+			if t.CachedCombWordlist1Path == "" {
+				tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.Wordlist1URL))
+				if err != nil {
+					t.Status = "error"
+					eventMu.Lock()
+					t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Failed to download first wordlist from URL: %v", err)})
+					eventMu.Unlock()
+					return
+				}
+				wl1 = tempFile
+				t.CachedCombWordlist1Path = tempFile // Cache the path for potential resume
+				
+				defer func() {
+					if err := os.Remove(tempFile); err != nil {
+						log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
+					}
+					// Clear cache when file is cleaned up
+					t.CachedCombWordlist1Path = ""
+				}()
+			}
 			// keep status as downloading until both resolve; set back to running here for simplicity
 			t.Status = "running"
-			defer func() {
-				if err := os.Remove(tempFile); err != nil {
-					log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
-				}
-			}()
 		} else if t.Wordlist1 != "" {
 			wl1 = strings.TrimSpace(t.Wordlist1)
 			if strings.HasPrefix(wl1, "/uploads/") {
@@ -1565,22 +1654,49 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 		// Handle second wordlist
 		if strings.TrimSpace(t.Wordlist2URL) != "" {
 			log.Printf("Using URL for second wordlist: %s", t.Wordlist2URL)
-			tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.Wordlist2URL))
-			if err != nil {
-				t.Status = "error"
-				eventMu.Lock()
-				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Failed to download second wordlist from URL: %v", err)})
-				eventMu.Unlock()
-				return
-			}
-			wl2 = tempFile
-			// resume running state after download
-			t.Status = "running"
-			defer func() {
-				if err := os.Remove(tempFile); err != nil {
-					log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
+			// Check if we have a cached wordlist path from a previous run (resume case)
+			if t.CachedCombWordlist2Path != "" {
+				// Verify the cached file still exists
+				if _, err := os.Stat(t.CachedCombWordlist2Path); err == nil {
+					wl2 = t.CachedCombWordlist2Path
+					log.Printf("Using cached second wordlist from previous run: %s", wl2)
+					// Log cache usage event for UI
+					eventMu.Lock()
+					t.Events = append(t.Events, map[string]any{
+						"event": "cache_used",
+						"message": "Using cached second wordlist from previous run",
+						"wordlist_type": "combination2",
+					})
+					eventMu.Unlock()
+				} else {
+					// Cached file doesn't exist, clear the cache and download again
+					t.CachedCombWordlist2Path = ""
 				}
-			}()
+			}
+			
+			// Download if we don't have a valid cached wordlist
+			if t.CachedCombWordlist2Path == "" {
+				tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.Wordlist2URL))
+				if err != nil {
+					t.Status = "error"
+					eventMu.Lock()
+					t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Failed to download second wordlist from URL: %v", err)})
+					eventMu.Unlock()
+					return
+				}
+				wl2 = tempFile
+				t.CachedCombWordlist2Path = tempFile // Cache the path for potential resume
+				
+				defer func() {
+					if err := os.Remove(tempFile); err != nil {
+						log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
+					}
+					// Clear cache when file is cleaned up
+					t.CachedCombWordlist2Path = ""
+				}()
+			}
+			// resume running state after download/cache check
+			t.Status = "running"
 		} else if t.Wordlist2 != "" {
 			wl2 = strings.TrimSpace(t.Wordlist2)
 			if strings.HasPrefix(wl2, "/uploads/") {
@@ -1671,25 +1787,52 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 			}
 		} else if strings.TrimSpace(t.WordlistURL) != "" {
 			// Handle URL wordlist download
-			tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.WordlistURL))
-			if err != nil {
-				t.Status = "error"
-				eventMu.Lock()
-				t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Failed to download wordlist from URL: %v", err)})
-				eventMu.Unlock()
-				return
+			// Check if we have a cached wordlist path from a previous run (resume case)
+			if t.CachedWordlistPath != "" {
+				// Verify the cached file still exists
+				if _, err := os.Stat(t.CachedWordlistPath); err == nil {
+					wl = t.CachedWordlistPath
+					log.Printf("Using cached wordlist from previous run: %s", wl)
+					// Log cache usage event for UI
+					eventMu.Lock()
+					t.Events = append(t.Events, map[string]any{
+						"event": "cache_used",
+						"message": "Using cached wordlist from previous run",
+						"wordlist_type": "main",
+					})
+					eventMu.Unlock()
+				} else {
+					// Cached file doesn't exist, clear the cache and download again
+					t.CachedWordlistPath = ""
+				}
 			}
 			
-			wl = tempFile
-			// resume running state after download
-			t.Status = "running"
-			
-			// Clean up temp file when done
-			defer func() {
-				if err := os.Remove(tempFile); err != nil {
-					log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
+			// Download if we don't have a valid cached wordlist
+			if t.CachedWordlistPath == "" {
+				tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.WordlistURL))
+				if err != nil {
+					t.Status = "error"
+					eventMu.Lock()
+					t.Events = append(t.Events, map[string]any{"error": fmt.Sprintf("Failed to download wordlist from URL: %v", err)})
+					eventMu.Unlock()
+					return
 				}
-			}()
+				
+				wl = tempFile
+				t.CachedWordlistPath = tempFile // Cache the path for potential resume
+				
+				// Clean up temp file when done
+				defer func() {
+					if err := os.Remove(tempFile); err != nil {
+						log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
+					}
+					// Clear cache when file is cleaned up
+					t.CachedWordlistPath = ""
+				}()
+			}
+			
+			// resume running state after download/cache check
+			t.Status = "running"
 		} else {
 			wl = strings.TrimSpace(t.Wordlist)
 			if wl == "" {
