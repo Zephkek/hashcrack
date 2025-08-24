@@ -555,73 +555,162 @@ HashCrack implements comprehensive state management for long-running operations:
 
 ## Architecture
 
+HashCrack follows a layered architecture design that promotes modularity, scalability, and maintainability. The system is built with clear separation of concerns across four distinct layers.
+
 ### **System Design**
 
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Web UI        │    │   REST API       │    │   CLI Interface │
-│   (JavaScript)  │◄──►│   (Go HTTP)      │◄──►│   (Cobra)       │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-                                │
-                                ▼
-                       ┌──────────────────┐
-                       │   Task Manager   │
-                       │   (Goroutines)   │
-                       └──────────────────┘
-                                │
-                ┌───────────────┼───────────────┐
-                ▼               ▼               ▼
-        ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
-        │   Cracker   │ │   Hashes    │ │   State     │
-        │   Engine    │ │   Registry  │ │   Manager   │
-        └─────────────┘ └─────────────┘ └─────────────┘
-                ▼               ▼               ▼
-        ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
-        │   Worker    │ │   Algorithm │ │   JSON      │
-        │   Pools     │ │   Impl.     │ │   Files     │ 
-        └─────────────┘ └─────────────┘ └─────────────┘
-```
+<div align="center">
+<img width="800" alt="HashCrack Architecture Diagram" src="https://github.com/user-attachments/assets/91408072-c312-4d82-9335-cbba3c9efefc" />
+</div>
+
+*The architecture consists of four main layers: Frontend (user interfaces), Core (task orchestration), Engine (business logic), and Implementation (concrete implementations).*
+
+---
+
+### **Layer Overview**
+
+| Layer | Purpose | Components | Technology |
+|-------|---------|------------|------------|
+| **Frontend** | User interaction and API endpoints | Web UI, REST API, CLI | JavaScript, Go HTTP, Cobra |
+| **Core** | Task orchestration and lifecycle management | Task Manager | Go Goroutines |
+| **Engine** | Business logic and algorithm coordination | Cracker Engine, Hash Registry, State Manager | Go interfaces and implementations |
+| **Implementation** | Concrete implementations and data persistence | Worker Pools, Algorithm Implementations, JSON Storage | Go concurrency, File I/O |
+
 
 ### **Component Breakdown**
 
 <details>
-<summary><strong>Core Components</strong></summary>
+<summary><strong>Frontend Layer Components</strong></summary>
 
-**`cmd/hashcrack/`** - CLI entry point and command definitions
-- Cobra-based command structure
-- Configuration management via Viper
-- Signal handling and graceful shutdown
+**Web UI (JavaScript)**
+- Modern single-page application with real-time updates
+- Server-Sent Events for live progress tracking
+- Responsive design supporting desktop and mobile
+- File upload with drag-and-drop functionality
 
-**`internal/web/`** - HTTP server and task management
-- REST API endpoints with JSON responses
-- Server-Sent Events for real-time updates  
-- Task lifecycle management and state persistence
-- File upload handling with validation
+**REST API (Go HTTP)**
+- RESTful endpoints for all system operations
+- JSON request/response format
+- Authentication and rate limiting ready
+- Comprehensive error handling and validation
 
-**`internal/hashes/`** - Algorithm registry and implementations
-- Modular hasher interface with 400+ implementations
-- Algorithm detection heuristics
-- Parameter validation for KDFs and complex algorithms
+**CLI Interface (Cobra)**
+- Full-featured command-line interface
+- Supports all attack modes and configurations
+- Scriptable for automation and batch operations
+- Rich help system and parameter validation
 
-**`internal/cracker/`** - Core attack engine
-- Worker pool management with bounded concurrency
-- Attack mode implementations (dictionary, mask, etc.)
+</details>
+
+<details>
+<summary><strong>Core Layer Components</strong></summary>
+
+**Task Manager (Goroutines)**
+- Concurrent task execution with bounded resources
+- Task lifecycle management (create, pause, resume, stop)
+- State persistence and recovery mechanisms
+- Real-time progress tracking and metrics collection
+
+</details>
+
+<details>
+<summary><strong>Engine Layer Components</strong></summary>
+
+**Cracker Engine**
+- Attack mode implementations and coordination
+- Worker pool management with optimal distribution
 - Progress tracking and checkpoint management
+- Configurable timeout and resource limits
 
-**`pkg/`** - Reusable components
-- `mask/` - Mask pattern generator and validator
-- `bruteforce/` - Combinatorial generator with state
-- `workerpool/` - Generic worker pool implementation
+**Hash Registry**
+- Modular hasher interface with 400+ implementations
+- Algorithm detection using heuristic analysis
+- Parameter validation for complex algorithms (KDFs)
+- Extensible design for adding new algorithms
+
+**State Manager**
+- Automatic checkpointing every 30 seconds
+- JSON-based state serialization
+- Atomic write operations to prevent corruption
+- State recovery and cleanup mechanisms
+
+</details>
+
+<details>
+<summary><strong>Implementation Layer Components</strong></summary>
+
+**Worker Pools**
+- Bounded concurrency with configurable worker counts
+- CPU-aware worker distribution and affinity
+- Graceful shutdown and resource cleanup
+- Performance monitoring and metrics collection
+
+**Algorithm Implementations**
+- Concrete hash function implementations
+- SIMD-accelerated operations where available
+- Memory-efficient batch processing
+- Support for legacy and modern cryptographic functions
+
+**JSON Storage**
+- Human-readable state file format
+- Structured logging and audit trails
+- Configuration management and persistence
+- Backup and recovery capabilities
 
 </details>
 
 ### **Performance Optimizations**
 
-- **SIMD Acceleration**: MD5 and SHA-256 with vectorized implementations
-- **Memory Pooling**: Reusable buffers to reduce GC pressure  
-- **Batch Processing**: Grouped hash operations for cache efficiency
-- **Worker Affinity**: CPU-aware worker distribution
-- **Progressive Loading**: Streaming wordlist processing for large files
+<details>
+<summary><strong>CPU and Memory Optimizations</strong></summary>
+
+**SIMD Acceleration**
+- Vectorized MD5 and SHA-256 implementations
+- Platform-specific optimizations (AVX2, SSE4.2)
+- Automatic fallback to standard implementations
+- Up to 4x performance improvement on supported hardware
+
+**Memory Management**
+- Reusable buffer pools to reduce GC pressure
+- Memory-mapped file I/O for large wordlists
+- Bounded memory usage with configurable limits
+- Efficient string interning for common passwords
+
+</details>
+
+<details>
+<summary><strong>Concurrency and I/O Optimizations</strong></summary>
+
+**Batch Processing**
+- Grouped hash operations for better cache efficiency
+- Reduced system call overhead
+- Optimal buffer sizes based on algorithm characteristics
+- Pipeline optimization for continuous processing
+
+**Worker Distribution**
+- CPU-aware worker allocation and affinity
+- Dynamic load balancing based on performance metrics
+- NUMA-aware memory allocation where supported
+- Graceful degradation under resource constraints
+
+</details>
+
+<details>
+<summary><strong>Algorithm and Data Optimizations</strong></summary>
+
+**Progressive Loading**
+- Streaming wordlist processing for files of any size
+- Lazy evaluation of mask patterns and combinations
+- Memory-efficient generators with state preservation
+- Adaptive caching based on access patterns
+
+**Smart Preprocessing**
+- Duplicate elimination and sorting optimizations
+- Rule-based transformations with compile-time optimization
+- Intelligent candidate generation order
+- Skip optimization for impossible combinations
+
+</details>
 
 ---
 
@@ -683,3 +772,4 @@ Environment variables (via Viper):
 <div align="center">
 
 **HashCrack** - Built with ❤️ by Mohamed Maatallah
+
