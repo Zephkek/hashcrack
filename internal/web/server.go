@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -78,12 +79,6 @@ type Task struct {
 	
 	IsPaused         bool          `json:"is_paused"`
 	LastCheckpoint   time.Time     `json:"last_checkpoint,omitempty"`
-	
-	// Cache wordlist path to avoid re-downloading on resume
-	CachedWordlistPath string       `json:"-"` // Don't include in JSON
-	CachedHybridWordlistPath string `json:"-"` // For hybrid attacks
-	CachedCombWordlist1Path string  `json:"-"` // For combination attacks
-	CachedCombWordlist2Path string  `json:"-"` // For combination attacks
 	WordlistLine     int64         `json:"wordlist_line,omitempty"`
 	BruteforceIndex  uint64        `json:"bruteforce_index,omitempty"`
 	MaskIndex        uint64        `json:"mask_index,omitempty"`
@@ -110,6 +105,7 @@ type DownloadStatus struct {
 type TaskProgress struct {
 	Tried             uint64    `json:"tried"`
 	Total             uint64    `json:"total,omitempty"`
+	TotalLines        uint64    `json:"total_lines,omitempty"`
 	ProgressPercent   float64   `json:"progress_percent"`
 	AttemptsPerSecond float64   `json:"attempts_per_second"`
 	ETASeconds        float64   `json:"eta_seconds,omitempty"`
@@ -394,6 +390,7 @@ func (m *Manager) saveTaskState(task *Task) {
 		CreatedAt:          task.CreatedAt,
 		StartedAt:          task.StartedAt,
 		Detected:           task.Detected,
+		// Ensure we never regress the saved resume position
 		WordlistLine:       task.WordlistLine,
 		BruteforceIndex:    task.BruteforceIndex,
 		MaskIndex:          task.MaskIndex,
@@ -510,8 +507,6 @@ func (m *Manager) ResumeTask(taskID string) error {
 	
 	task.Status = "running"
 	task.IsPaused = false
-	// Clear any download status that might be lingering from previous runs
-	task.Download = nil
 	m.mu.Unlock()
 	
 
@@ -1023,8 +1018,6 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-const maxUpload = 10 << 20
-
 func (s *Server) handleUploads(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -1044,7 +1037,7 @@ func (s *Server) handleUploads(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"files": files})
 		
 	case http.MethodPost:
-		if err := r.ParseMultipartForm(maxUpload); err != nil {
+		if err := r.ParseMultipartForm(100 << 20); err != nil { // 100MB max for form parsing
 			http.Error(w, "Invalid multipart form: "+err.Error(), 400)
 			return
 		}
@@ -1055,11 +1048,6 @@ func (s *Server) handleUploads(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer f.Close()
-		
-		if hdr.Size > maxUpload {
-			http.Error(w, fmt.Sprintf("File too large (max %dMB)", maxUpload/(1024*1024)), 413)
-			return
-		}
 		
 		if hdr.Size == 0 {
 			http.Error(w, "Empty file not allowed", 400)
@@ -1104,7 +1092,7 @@ func (s *Server) handleUploads(w http.ResponseWriter, r *http.Request) {
 		}
 		defer dst.Close()
 		
-		written, err := io.Copy(dst, io.LimitReader(f, maxUpload))
+		written, err := io.Copy(dst, f)
 		if err != nil {
 			os.Remove(dstPath)
 			http.Error(w, "Failed to save file", 500)
@@ -1214,6 +1202,8 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 	
 	eventMu := sync.Mutex{}
 	var startTime time.Time
+	// Capture baseline tried count once per (re)run to keep cumulative totals stable across resume
+	var resumeTriedBaseline uint64
 	
 	w := t.Workers
 	if w < 1 {
@@ -1238,6 +1228,11 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 	lastCheckpointTime := time.Now()
 	checkpointMutex := sync.Mutex{}
 	
+	// Determine baseline from any previous progress (e.g., after resume)
+	if bp := t.GetProgress(); bp != nil {
+		resumeTriedBaseline = bp.Tried
+	}
+
 	c := cracker.New(cracker.Options{
 		Workers: w,
 		Event: func(event string, kv map[string]any) {
@@ -1260,6 +1255,11 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 					if total, ok := kv["total_combinations"].(uint64); ok {
 						p.Total = total
 					}
+					// Store total lines for dictionary progress calculation
+					if totalLines, ok := kv["total_lines"].(uint64); ok {
+						// Add total_lines as a property we can access later
+						p.TotalLines = totalLines
+					}
 				})
 				
 			case "progress":
@@ -1267,12 +1267,23 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 				
 				t.UpdateProgress(func(p *TaskProgress) {
 					if tried, ok := kv["tried"].(uint64); ok {
-						p.Tried = tried
-						p.updateStableSpeed(tried, now)
+						// Display total tried including pre-pause baseline
+						totalTried := resumeTriedBaseline + tried
+						p.Tried = totalTried
+						p.updateStableSpeed(totalTried, now)
 						p.calculateStableETA()
 					}
 					
-					if percent, ok := kv["progress_percent"].(float64); ok {
+					// For dictionary attacks, use line progress for more accurate percentage
+					if currentLine, ok := kv["current_line"].(int64); ok && p.TotalLines > 0 {
+						// Use line-based progress for dictionary attacks which is more accurate
+						lineProgress := float64(currentLine) / float64(p.TotalLines) * 100
+						p.ProgressPercent = math.Min(lineProgress, 100.0)
+						// Keep resume position monotonic and up-to-date
+						if currentLine > t.WordlistLine {
+							t.WordlistLine = currentLine
+						}
+					} else if percent, ok := kv["progress_percent"].(float64); ok {
 						p.ProgressPercent = percent
 					} else if p.Total > 0 {
 						p.ProgressPercent = float64(p.Tried) / float64(p.Total) * 100
@@ -1303,7 +1314,7 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 				checkpointMutex.Unlock()
 			}
 		},
-		ProgressEvery: 5000,
+		ProgressEvery: 2000,
 		Transform: buildTransform(t.Rules),
 	})
 	defer c.Close()
@@ -1366,20 +1377,29 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 			bf.SetStartIndex(t.BruteforceIndex)
 		}
 		
+		// Snapshot baseline tried at the time of starting bruteforce (in case of resume)
+		baselineProgress := t.GetProgress()
+		var triedBaseline uint64
+		if baselineProgress != nil {
+			triedBaseline = baselineProgress.Tried
+		}
+
 		bfResult, bfErr := bf.Crack(ctx, h, params, t.Target, func(tried, total uint64, candidate string, currentLength int) {
 			now := time.Now()
 			
 			t.UpdateProgress(func(p *TaskProgress) {
-				p.Tried = tried
+				// Include baseline so resume doesn't reset counts
+				totalTried := triedBaseline + tried
+				p.Tried = totalTried
 				
 				if p.Total == 0 && total > 0 {
 					p.Total = total
 				}
 				
-				p.updateStableSpeed(tried, now)
+				p.updateStableSpeed(totalTried, now)
 				
 				if p.Total > 0 {
-					p.ProgressPercent = float64(tried) / float64(p.Total) * 100
+					p.ProgressPercent = float64(totalTried) / float64(p.Total) * 100
 				}
 				p.calculateStableETA()
 				
@@ -1444,29 +1464,25 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 		// Handle wordlist source
 		if strings.TrimSpace(t.HybridWordlistURL) != "" {
 			log.Printf("Using hybrid URL wordlist: %s", t.HybridWordlistURL)
-			// Check if we have a cached wordlist path from a previous run (resume case)
-			if t.CachedHybridWordlistPath != "" {
+			
+			// Check if we already have cached file from previous pause/resume
+			var tempFile string
+			var err error
+			
+			if t.Wordlist != "" && strings.Contains(t.Wordlist, "wordlist_") {
 				// Verify the cached file still exists
-				if _, err := os.Stat(t.CachedHybridWordlistPath); err == nil {
-					wl = t.CachedHybridWordlistPath
-					log.Printf("Using cached hybrid wordlist from previous run: %s", wl)
-					// Log cache usage event for UI
-					eventMu.Lock()
-					t.Events = append(t.Events, map[string]any{
-						"event": "cache_used",
-						"message": "Using cached hybrid wordlist from previous run",
-						"wordlist_type": "hybrid",
-					})
-					eventMu.Unlock()
+				if _, statErr := os.Stat(t.Wordlist); statErr == nil {
+					log.Printf("Resuming hybrid attack with cached wordlist: %s", t.Wordlist)
+					tempFile = t.Wordlist
 				} else {
-					// Cached file doesn't exist, clear the cache and download again
-					t.CachedHybridWordlistPath = ""
+					log.Printf("Cached hybrid wordlist file %s no longer exists, re-downloading", t.Wordlist)
+					t.Wordlist = "" // Clear invalid cache
 				}
 			}
 			
-			// Download if we don't have a valid cached wordlist
-			if t.CachedHybridWordlistPath == "" {
-				tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.HybridWordlistURL))
+			// Download only if we don't have a valid cached file
+			if tempFile == "" {
+				tempFile, err = downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.HybridWordlistURL))
 				if err != nil {
 					t.Status = "error"
 					eventMu.Lock()
@@ -1474,19 +1490,23 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 					eventMu.Unlock()
 					return
 				}
-				wl = tempFile
-				t.CachedHybridWordlistPath = tempFile // Cache the path for potential resume
-				
-				defer func() {
-					if err := os.Remove(tempFile); err != nil {
-						log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
-					}
-					// Clear cache when file is cleaned up
-					t.CachedHybridWordlistPath = ""
-				}()
+				// Cache the downloaded file path
+				t.Wordlist = tempFile
+				log.Printf("Hybrid wordlist downloaded and cached at: %s", tempFile)
 			}
-			// resume running state after download/cache check
+			
+			wl = tempFile
+			// resume running state after download
 			t.Status = "running"
+			defer func() {
+				if t.Status == "completed" || t.Status == "error" || t.Status == "stopped" {
+					if err := os.Remove(tempFile); err != nil {
+						log.Printf("Failed to remove temporary hybrid wordlist file %s: %v", tempFile, err)
+					} else {
+						log.Printf("Cleaned up temporary hybrid wordlist file: %s", tempFile)
+					}
+				}
+			}()
 		} else if t.UseDefaultWordlist {
 			wl = "testdata/rockyou-mini.txt"
 			log.Printf("Using default wordlist: %s", wl)
@@ -1499,29 +1519,25 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 			}
 		} else if strings.TrimSpace(t.WordlistURL) != "" {
 			log.Printf("Using URL wordlist: %s", t.WordlistURL)
-			// Check if we have a cached wordlist path from a previous run (resume case)
-			if t.CachedWordlistPath != "" {
+			
+			// Check if we already have cached file from previous pause/resume
+			var tempFile string
+			var err error
+			
+			if t.Wordlist != "" && strings.Contains(t.Wordlist, "wordlist_") {
 				// Verify the cached file still exists
-				if _, err := os.Stat(t.CachedWordlistPath); err == nil {
-					wl = t.CachedWordlistPath
-					log.Printf("Using cached wordlist from previous run: %s", wl)
-					// Log cache usage event for UI
-					eventMu.Lock()
-					t.Events = append(t.Events, map[string]any{
-						"event": "cache_used",
-						"message": "Using cached wordlist from previous run",
-						"wordlist_type": "hybrid_main",
-					})
-					eventMu.Unlock()
+				if _, statErr := os.Stat(t.Wordlist); statErr == nil {
+					log.Printf("Resuming with cached wordlist: %s", t.Wordlist)
+					tempFile = t.Wordlist
 				} else {
-					// Cached file doesn't exist, clear the cache and download again
-					t.CachedWordlistPath = ""
+					log.Printf("Cached wordlist file %s no longer exists, re-downloading", t.Wordlist)
+					t.Wordlist = "" // Clear invalid cache
 				}
 			}
 			
-			// Download if we don't have a valid cached wordlist
-			if t.CachedWordlistPath == "" {
-				tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.WordlistURL))
+			// Download only if we don't have a valid cached file
+			if tempFile == "" {
+				tempFile, err = downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.WordlistURL))
 				if err != nil {
 					t.Status = "error"
 					eventMu.Lock()
@@ -1529,19 +1545,23 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 					eventMu.Unlock()
 					return
 				}
-				wl = tempFile
-				t.CachedWordlistPath = tempFile // Cache the path for potential resume
-				
-				defer func() {
+				// Cache the downloaded file path
+				t.Wordlist = tempFile
+				log.Printf("Wordlist downloaded and cached at: %s", tempFile)
+			}
+			
+			wl = tempFile
+			// resume running state after download
+			t.Status = "running"
+			defer func() {
+				if t.Status == "completed" || t.Status == "error" || t.Status == "stopped" {
 					if err := os.Remove(tempFile); err != nil {
 						log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
+					} else {
+						log.Printf("Cleaned up temporary wordlist file: %s", tempFile)
 					}
-					// Clear cache when file is cleaned up
-					t.CachedWordlistPath = ""
-				}()
-			}
-			// resume running state after download/cache check
-			t.Status = "running"
+				}
+			}()
 		} else {
 			wl = strings.TrimSpace(t.Wordlist)
 			log.Printf("Using uploaded wordlist: %s", wl)
@@ -1597,29 +1617,25 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 		// Handle first wordlist
 		if strings.TrimSpace(t.Wordlist1URL) != "" {
 			log.Printf("Using URL for first wordlist: %s", t.Wordlist1URL)
-			// Check if we have a cached wordlist path from a previous run (resume case)
-			if t.CachedCombWordlist1Path != "" {
+			
+			// Check if we already have cached file from previous pause/resume
+			var tempFile string
+			var err error
+			
+			if t.Wordlist1 != "" && strings.Contains(t.Wordlist1, "wordlist_") {
 				// Verify the cached file still exists
-				if _, err := os.Stat(t.CachedCombWordlist1Path); err == nil {
-					wl1 = t.CachedCombWordlist1Path
-					log.Printf("Using cached first wordlist from previous run: %s", wl1)
-					// Log cache usage event for UI
-					eventMu.Lock()
-					t.Events = append(t.Events, map[string]any{
-						"event": "cache_used",
-						"message": "Using cached first wordlist from previous run",
-						"wordlist_type": "combination1",
-					})
-					eventMu.Unlock()
+				if _, statErr := os.Stat(t.Wordlist1); statErr == nil {
+					log.Printf("Resuming combination attack with cached first wordlist: %s", t.Wordlist1)
+					tempFile = t.Wordlist1
 				} else {
-					// Cached file doesn't exist, clear the cache and download again
-					t.CachedCombWordlist1Path = ""
+					log.Printf("Cached first wordlist file %s no longer exists, re-downloading", t.Wordlist1)
+					t.Wordlist1 = "" // Clear invalid cache
 				}
 			}
 			
-			// Download if we don't have a valid cached wordlist
-			if t.CachedCombWordlist1Path == "" {
-				tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.Wordlist1URL))
+			// Download only if we don't have a valid cached file
+			if tempFile == "" {
+				tempFile, err = downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.Wordlist1URL))
 				if err != nil {
 					t.Status = "error"
 					eventMu.Lock()
@@ -1627,19 +1643,23 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 					eventMu.Unlock()
 					return
 				}
-				wl1 = tempFile
-				t.CachedCombWordlist1Path = tempFile // Cache the path for potential resume
-				
-				defer func() {
-					if err := os.Remove(tempFile); err != nil {
-						log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
-					}
-					// Clear cache when file is cleaned up
-					t.CachedCombWordlist1Path = ""
-				}()
+				// Cache the downloaded file path
+				t.Wordlist1 = tempFile
+				log.Printf("First wordlist downloaded and cached at: %s", tempFile)
 			}
+			
+			wl1 = tempFile
 			// keep status as downloading until both resolve; set back to running here for simplicity
 			t.Status = "running"
+			defer func() {
+				if t.Status == "completed" || t.Status == "error" || t.Status == "stopped" {
+					if err := os.Remove(tempFile); err != nil {
+						log.Printf("Failed to remove temporary first wordlist file %s: %v", tempFile, err)
+					} else {
+						log.Printf("Cleaned up temporary first wordlist file: %s", tempFile)
+					}
+				}
+			}()
 		} else if t.Wordlist1 != "" {
 			wl1 = strings.TrimSpace(t.Wordlist1)
 			if strings.HasPrefix(wl1, "/uploads/") {
@@ -1654,29 +1674,25 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 		// Handle second wordlist
 		if strings.TrimSpace(t.Wordlist2URL) != "" {
 			log.Printf("Using URL for second wordlist: %s", t.Wordlist2URL)
-			// Check if we have a cached wordlist path from a previous run (resume case)
-			if t.CachedCombWordlist2Path != "" {
+			
+			// Check if we already have cached file from previous pause/resume
+			var tempFile string
+			var err error
+			
+			if t.Wordlist2 != "" && strings.Contains(t.Wordlist2, "wordlist_") {
 				// Verify the cached file still exists
-				if _, err := os.Stat(t.CachedCombWordlist2Path); err == nil {
-					wl2 = t.CachedCombWordlist2Path
-					log.Printf("Using cached second wordlist from previous run: %s", wl2)
-					// Log cache usage event for UI
-					eventMu.Lock()
-					t.Events = append(t.Events, map[string]any{
-						"event": "cache_used",
-						"message": "Using cached second wordlist from previous run",
-						"wordlist_type": "combination2",
-					})
-					eventMu.Unlock()
+				if _, statErr := os.Stat(t.Wordlist2); statErr == nil {
+					log.Printf("Resuming combination attack with cached second wordlist: %s", t.Wordlist2)
+					tempFile = t.Wordlist2
 				} else {
-					// Cached file doesn't exist, clear the cache and download again
-					t.CachedCombWordlist2Path = ""
+					log.Printf("Cached second wordlist file %s no longer exists, re-downloading", t.Wordlist2)
+					t.Wordlist2 = "" // Clear invalid cache
 				}
 			}
 			
-			// Download if we don't have a valid cached wordlist
-			if t.CachedCombWordlist2Path == "" {
-				tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.Wordlist2URL))
+			// Download only if we don't have a valid cached file
+			if tempFile == "" {
+				tempFile, err = downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.Wordlist2URL))
 				if err != nil {
 					t.Status = "error"
 					eventMu.Lock()
@@ -1684,19 +1700,23 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 					eventMu.Unlock()
 					return
 				}
-				wl2 = tempFile
-				t.CachedCombWordlist2Path = tempFile // Cache the path for potential resume
-				
-				defer func() {
-					if err := os.Remove(tempFile); err != nil {
-						log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
-					}
-					// Clear cache when file is cleaned up
-					t.CachedCombWordlist2Path = ""
-				}()
+				// Cache the downloaded file path
+				t.Wordlist2 = tempFile
+				log.Printf("Second wordlist downloaded and cached at: %s", tempFile)
 			}
-			// resume running state after download/cache check
+			
+			wl2 = tempFile
+			// resume running state after download
 			t.Status = "running"
+			defer func() {
+				if t.Status == "completed" || t.Status == "error" || t.Status == "stopped" {
+					if err := os.Remove(tempFile); err != nil {
+						log.Printf("Failed to remove temporary second wordlist file %s: %v", tempFile, err)
+					} else {
+						log.Printf("Cleaned up temporary second wordlist file: %s", tempFile)
+					}
+				}
+			}()
 		} else if t.Wordlist2 != "" {
 			wl2 = strings.TrimSpace(t.Wordlist2)
 			if strings.HasPrefix(wl2, "/uploads/") {
@@ -1753,18 +1773,16 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 			hint = t.Company
 		}
 		
-		// Use the proper association attack function
 		assocOpts := cracker.AssociationOptions{
 			Username: t.Username,
 			Hint:     hint,
 			Filename: t.Filename,
-			BaseInfo: t.Company, // Use company as base info if available
+			BaseInfo: t.Company, 
 		}
 		
 		res, err = c.CrackAssociation(ctx, h, params, t.Target, assocOpts)
 		
 	} else {
-		// Wordlist mode with resume support
 		var wl string
 		
 		if t.UseDefaultWordlist {
@@ -1786,30 +1804,26 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 				return
 			}
 		} else if strings.TrimSpace(t.WordlistURL) != "" {
-			// Handle URL wordlist download
-			// Check if we have a cached wordlist path from a previous run (resume case)
-			if t.CachedWordlistPath != "" {
+			// Handle URL wordlist download - check if we already have cached file from previous pause/resume
+			var tempFile string
+			var err error
+			
+			// If we already have a wordlist file cached from URL, reuse it
+			if t.Wordlist != "" && strings.Contains(t.Wordlist, "wordlist_") {
 				// Verify the cached file still exists
-				if _, err := os.Stat(t.CachedWordlistPath); err == nil {
-					wl = t.CachedWordlistPath
-					log.Printf("Using cached wordlist from previous run: %s", wl)
-					// Log cache usage event for UI
-					eventMu.Lock()
-					t.Events = append(t.Events, map[string]any{
-						"event": "cache_used",
-						"message": "Using cached wordlist from previous run",
-						"wordlist_type": "main",
-					})
-					eventMu.Unlock()
+				if _, statErr := os.Stat(t.Wordlist); statErr == nil {
+					log.Printf("Resuming with cached wordlist: %s", t.Wordlist)
+					tempFile = t.Wordlist
 				} else {
-					// Cached file doesn't exist, clear the cache and download again
-					t.CachedWordlistPath = ""
+					log.Printf("Cached wordlist file %s no longer exists, re-downloading", t.Wordlist)
+					t.Wordlist = "" // Clear invalid cache
 				}
 			}
 			
-			// Download if we don't have a valid cached wordlist
-			if t.CachedWordlistPath == "" {
-				tempFile, err := downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.WordlistURL))
+			// Download only if we don't have a valid cached file
+			if tempFile == "" {
+				log.Printf("Downloading wordlist from URL: %s", t.WordlistURL)
+				tempFile, err = downloadWordlistFromURLWithProgress(ctx, t, strings.TrimSpace(t.WordlistURL))
 				if err != nil {
 					t.Status = "error"
 					eventMu.Lock()
@@ -1817,22 +1831,25 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 					eventMu.Unlock()
 					return
 				}
-				
-				wl = tempFile
-				t.CachedWordlistPath = tempFile // Cache the path for potential resume
-				
-				// Clean up temp file when done
-				defer func() {
-					if err := os.Remove(tempFile); err != nil {
-						log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
-					}
-					// Clear cache when file is cleaned up
-					t.CachedWordlistPath = ""
-				}()
+				// Cache the downloaded file path
+				t.Wordlist = tempFile
+				log.Printf("Wordlist downloaded and cached at: %s", tempFile)
 			}
 			
-			// resume running state after download/cache check
+			wl = tempFile
+			// resume running state after download
 			t.Status = "running"
+			
+			// Clean up temp file when task is completely finished (not just paused)
+			defer func() {
+				if t.Status == "completed" || t.Status == "error" || t.Status == "stopped" {
+					if err := os.Remove(tempFile); err != nil {
+						log.Printf("Failed to remove temporary wordlist file %s: %v", tempFile, err)
+					} else {
+						log.Printf("Cleaned up temporary wordlist file: %s", tempFile)
+					}
+				}
+			}()
 		} else {
 			wl = strings.TrimSpace(t.Wordlist)
 			if wl == "" {
@@ -1940,9 +1957,15 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 	}
 	
 	t.UpdateProgress(func(p *TaskProgress) {
-		p.Tried = res.Tried
+		// If the task had a previous tried baseline (from resume), keep cumulative tried
+		if p.Tried > res.Tried {
+			// Preserve the larger value which already included baseline
+			// This avoids regressions when final result reports only session tried
+		} else {
+			p.Tried = res.Tried
+		}
 		if p.Total > 0 {
-			p.ProgressPercent = float64(res.Tried) / float64(p.Total) * 100
+			p.ProgressPercent = float64(p.Tried) / float64(p.Total) * 100
 		} else {
 			p.ProgressPercent = 100.0
 		}
@@ -1956,6 +1979,13 @@ func (m *Manager) runTask(id string, t *Task, h hashes.Hasher) {
 		}
 	})
 	
+	// Ensure result tried reflects the cumulative attempts shown in progress
+	if t.Result != nil && t.Progress != nil {
+		if t.Progress.Tried > t.Result.Tried {
+			t.Result.Tried = t.Progress.Tried
+		}
+	}
+
 	// Save final state
 	m.saveTaskState(t)
 	

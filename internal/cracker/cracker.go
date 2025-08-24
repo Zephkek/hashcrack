@@ -197,17 +197,18 @@ func (c *Cracker) CrackWordlistResumable(ctx context.Context, h hashes.Hasher, p
 								return
 							}
 						}
-						// Optimized progress reporting interval
-						if localTried%2000 == 0 {
-							globalCount := atomic.AddUint64(&tried, 2000)
+						// Progress reporting every 1000 attempts for better responsiveness
+						if localTried%1000 == 0 {
+							globalCount := atomic.AddUint64(&tried, 1000)
 							localTried = 0
 							every := c.opts.ProgressEvery
-							if every == 0 { every = 5000 }
+							if every == 0 { every = 2000 }
 							if globalCount%every == 0 { 
 								c.logEvent("progress", map[string]any{
 									"tried": globalCount, 
 									"line": work.line,
 									"total": totalCombinations,
+									"current_line": work.line,
 								})
 								if resumeOpts.CheckpointFunc != nil {
 									resumeOpts.CheckpointFunc(work.line)
@@ -244,19 +245,20 @@ func (c *Cracker) CrackWordlistResumable(ctx context.Context, h hashes.Hasher, p
 							return
 						}
 						
-						// Optimized progress reporting
-						if localTried%2000 == 0 {
-							globalCount := atomic.AddUint64(&tried, 2000)
+						// Progress reporting every 1000 attempts for better responsiveness
+						if localTried%1000 == 0 {
+							globalCount := atomic.AddUint64(&tried, 1000)
 							localTried = 0 
 							
 							every := c.opts.ProgressEvery
-							if every == 0 { every = 5000 }
+							if every == 0 { every = 2000 }
 							if globalCount%every == 0 { 
 								c.logEvent("progress", map[string]any{
 									"tried": globalCount,
 									"candidate": cand,
 									"line": work.line,
 									"total": totalCombinations,
+									"current_line": work.line,
 								})
 								if resumeOpts.CheckpointFunc != nil {
 									resumeOpts.CheckpointFunc(work.line)

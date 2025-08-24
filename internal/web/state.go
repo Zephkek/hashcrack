@@ -224,7 +224,9 @@ func (sm *StateManager) UpdateProgress(taskID string, tried uint64, resumeData i
 	
 	switch data := resumeData.(type) {
 	case int64:
-		state.WordlistLine = data
+		if data > state.WordlistLine {
+			state.WordlistLine = data
+		}
 	case uint64:
 		if state.Mode == "bruteforce" {
 			state.BruteforceIndex = data
@@ -243,7 +245,9 @@ func (sm *StateManager) UpdateProgress(taskID string, tried uint64, resumeData i
 			state.CurrentLength = length
 		}
 		if line, ok := data["line"].(int64); ok {
-			state.WordlistLine = line
+			if line > state.WordlistLine {
+				state.WordlistLine = line
+			}
 		}
 	}
 	
