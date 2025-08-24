@@ -9,7 +9,7 @@
 
 [![Go Version](https://img.shields.io/badge/Go-1.23%2B-00ADD8?style=flat-square&logo=go&logoColor=white)](https://golang.org/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker&logoColor=white)](https://www.docker.com/)
-[![License](https://img.shields.io/badge/License-Educational-green?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey?style=flat-square)](https://github.com/golang/go/wiki/MinimumRequirements)
 
 </div>
@@ -772,4 +772,5 @@ Environment variables (via Viper):
 <div align="center">
 
 **HashCrack** - Built with ❤️ by Mohamed Maatallah
+
 
