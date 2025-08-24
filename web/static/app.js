@@ -19,18 +19,8 @@ async function loadTasks() {
   }
 }
 
-async function loadSta    tr.innerHTML = `
-      <td><code>${t.id||''}</code> ${resumeIndicator}</td>
-      <td>
-        ${algoDisplay}
-        <div class="mode-info">${modeInfo}</div>
-      </td>
-      <td>${badge(t.status)}</td>
-      <td class="progress-column">
-        ${progress}
-        ${cacheIndicator}
-      </td>
-      <td>${result}</td>`; try {
+async function loadStats() {
+  try {
     const resp = await fetch('/api/stats');
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const stats = await resp.json();
@@ -691,7 +681,6 @@ document.addEventListener('DOMContentLoaded', () => {
     loadTasks().catch(err => console.error('Initial tasks load failed:', err)),
     loadStats().catch(err => console.error('Initial stats load failed:', err))
   ]).then(() => {
-    // Prefer SSE stream for tasks when available
     try {
       const es = new EventSource('/api/tasks/stream');
       es.addEventListener('tasks', ev => {
@@ -701,7 +690,6 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch(e){}
       });
       es.onerror = () => {
-        // Fallback to polling if SSE fails
         es.close();
         setInterval(() => {
           loadTasks().catch(err => console.error('Periodic tasks load failed:', err));
@@ -719,7 +707,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
-// Global utility functions
 window.nextStep = function(step) {
   showStep(step);
 };
@@ -746,17 +733,13 @@ function isValidUrl(string) {
   }
 }
 
-// Set wordlist URL from shortcut buttons
 window.setWordlistUrl = function(inputIdOrUrl, url) {
   let urlInput, urlToSet;
   
-  // Handle both old and new function signatures
   if (arguments.length === 1) {
-    // Old signature: setWordlistUrl(url)
     urlInput = document.getElementById('wordlistUrl');
     urlToSet = inputIdOrUrl;
   } else {
-    // New signature: setWordlistUrl(inputId, url)
     urlInput = document.getElementById(inputIdOrUrl);
     urlToSet = url;
   }
@@ -765,12 +748,10 @@ window.setWordlistUrl = function(inputIdOrUrl, url) {
     urlInput.value = urlToSet;
     urlInput.dispatchEvent(new Event('input'));
     
-    // Show validation status in the matching section
     validateWordlistUrlInternal(urlToSet, urlInput.id);
   }
 };
 
-// Wrapper function for validating URL by input element ID
 window.validateWordlistUrl = function(inputIdOrUrl) {
   let url, inputId = null;
   if (typeof inputIdOrUrl === 'string' && inputIdOrUrl.startsWith('http')) {
@@ -784,9 +765,7 @@ window.validateWordlistUrl = function(inputIdOrUrl) {
   validateWordlistUrlInternal(url, inputId);
 };
 
-// Validate wordlist URL (internal function) - SIMPLIFIED
 async function validateWordlistUrlInternal(url, inputId) {
-  // Choose the correct status elements based on which input is being validated
   let statusDiv = document.getElementById('urlStatus');
   let statusText = document.getElementById('urlStatusText');
   let statusIndicator = statusDiv;
@@ -835,7 +814,6 @@ async function validateWordlistUrlInternal(url, inputId) {
     clearTimeout(timeoutId);
     
     if (response.ok) {
-      // SIMPLIFIED SUCCESS MESSAGE
       statusIndicator.className = 'status-indicator success';
       statusText.innerHTML = `<i class="fas fa-check-circle"></i> URL is valid and accessible`;
     } else {
@@ -843,7 +821,6 @@ async function validateWordlistUrlInternal(url, inputId) {
       statusText.innerHTML = `<i class="fas fa-exclamation-triangle"></i> URL not accessible (${response.status})`;
     }
   } catch (error) {
-    // Only show error messages, not success messages
     if (error.name === 'AbortError') {
       statusIndicator.className = 'status-indicator warning';
       statusText.innerHTML = `<i class="fas fa-clock"></i> Validation timeout - URL may be slow`;
@@ -854,7 +831,6 @@ async function validateWordlistUrlInternal(url, inputId) {
   }
 }
 
-// Toggle advanced algorithm parameters
 function debounce(fn, delay = 300) {
   let t;
   return (...args) => {
